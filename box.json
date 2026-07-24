@@ -1,0 +1,56 @@
+{
+    "name":"errorAlerts",
+    "version":"1.0.0",
+    "author":"Angry Sam Productions, Inc.",
+    "location":"ForgeboxStorage",
+    "slug":"erroralerts",
+    "type":"modules",
+    "packageDirectory":"errorAlerts",
+    "keywords":"logging,errors,notifications,email,logbox,alerts",
+    "homepage":"https://github.com/homestar9/errorAlerts",
+    "documentation":"https://github.com/homestar9/errorAlerts",
+    "repository":{
+        "type":"git",
+        "url":"https://github.com/homestar9/errorAlerts/"
+    },
+    "bugs":"https://github.com/homestar9/errorAlerts/issues",
+    "shortDescription":"Throttled error notifications for ColdBox: first-N + digest emails from a self-registering LogBox appender, with swappable notifiers.",
+    "contributors":[],
+    "ignore":[
+        "**/.*",
+        "/build/",
+        "/modules/",
+        "/test-harness/",
+        "/test-results/",
+        "/server-*.json",
+        "/AGENTS.md",
+        "/CLAUDE.md"
+    ],
+    "dependencies":{
+        "cbmailservices":"^2.11.0"
+    },
+    "devDependencies":{
+        "commandbox-dotenv":"*",
+        "commandbox-cfconfig":"*",
+        "commandbox-cfformat":"*"
+    },
+    "installPaths":{
+        "cbmailservices":"modules/cbmailservices/"
+    },
+    "scripts":{
+        "build:module":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
+        "install:dependencies":"install && cd test-harness && install",
+        "release":"recipe build/release.boxr",
+        "format":"cfformat run models,interceptors,config,ModuleConfig.cfc,test-harness/tests/specs --overwrite",
+        "format:check":"cfformat check models,interceptors,config,ModuleConfig.cfc,test-harness/tests/specs ./.cfformat.json",
+        "start:2023":"server start serverConfigFile=server-adobe@2023.json",
+        "stop:2023":"server stop serverConfigFile=server-adobe@2023.json",
+        "logs:2023":"server log serverConfigFile=server-adobe@2023.json --follow",
+        "start:boxlang":"server start serverConfigFile=server-boxlang-cfml@1.json",
+        "stop:boxlang":"server stop serverConfigFile=server-boxlang-cfml@1.json",
+        "logs:boxlang":"server log serverConfigFile=server-boxlang-cfml@1.json --follow"
+    },
+    "testbox":{
+        "runner":"http://127.0.0.1:60310/tests/runner.cfm"
+    }
+}

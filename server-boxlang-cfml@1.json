@@ -1,0 +1,23 @@
+{
+    "name":"errorAlerts-boxlang@1",
+    "app":{
+        "serverHomeDirectory":".engine/boxlang1",
+        "cfengine":"boxlang-cfml@1"
+    },
+    "web":{
+        "http":{
+            "port":"60310"
+        },
+        "rewrites":{
+            "enable":"true"
+        },
+        "webroot":"test-harness",
+        "aliases":{
+            "/moduleroot/errorAlerts":"./"
+        }
+    },
+    "jvm":{
+        "heapSize":"512"
+    },
+    "openBrowser":false
+}

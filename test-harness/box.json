@@ -1,0 +1,28 @@
+{
+    "name":"errorAlerts-test-harness",
+    "version":"1.0.0",
+    "author":"David Levin",
+    "location":"",
+    "slug":"erroralerts-test-harness",
+    "createPackageDirectory":false,
+    "type":"mvc",
+    "shortDescription":"Test harness for the errorAlerts module.",
+    "ignore":[],
+    "devDependencies":{
+        "testbox":"^7",
+        "commandbox-dotenv":"*",
+        "commandbox-cfconfig":"*"
+    },
+    "installPaths":{
+        "testbox":"testbox/",
+        "coldbox":"coldbox/"
+    },
+    "dependencies":{
+        "coldbox":"^8"
+    },
+    "scripts":{},
+    "testbox":{
+        "runner":"http://127.0.0.1:60310/tests/runner.cfm"
+    },
+    "reinitWatchDirectory":"../"
+}

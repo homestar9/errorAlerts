@@ -1,0 +1,18 @@
+# DIRECTORY PATTERNS MUST BE ANCHORED WITH A LEADING "/".
+# CommandBox honors this file when it packages a module, so an unanchored
+# pattern silently strips matching source folders from the published zip.
+# That is how caffeinecms 1.0.0-beta.1 shipped broken. Publish only via
+# build/release.boxr, which packages from the built tree instead.
+/.engine/
+/.artifacts/
+/.tmp/
+/modules/
+/test-results/
+/test-harness/coldbox/
+/test-harness/testbox/
+/test-harness/modules/
+/test-harness/logs/
+
+# File patterns (safe unanchored: they match exact file names, not folders)
+.env
+*.bak

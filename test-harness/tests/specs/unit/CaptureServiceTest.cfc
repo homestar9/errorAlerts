@@ -1,0 +1,121 @@
+/**
+ * Unit tests for CaptureService: ignore lists, verdict handling, digest
+ * dispatch, the notifier seam, and the never-throw rule.
+ */
+component extends="tests.resources.BaseUnitSpec" {
+
+	function run(){
+		describe( "CaptureService", function(){
+			beforeEach( function(){
+				settings = defaultSettings();
+
+				notifierStub = createStub();
+				notifierStub.$( "sendNotification" );
+
+				signatureStub = createStub();
+				signatureStub.$( "compute", "sig-1" );
+
+				throttleStub = createStub();
+				throttleStub.$( "record", { action : "SEND", occurrence : 1, expiredDigest : {} } );
+
+				builderStub = createStub();
+				builderStub.$( "build", { type : "error" } );
+				builderStub.$( "buildDigest", { type : "digest" } );
+
+				capture = prepareMock( new errorAlerts.models.CaptureService() );
+				capture.$property( propertyName = "settings", mock = settings );
+				capture.$property( propertyName = "signatureService", mock = signatureStub );
+				capture.$property( propertyName = "throttleService", mock = throttleStub );
+				capture.$property( propertyName = "payloadBuilder", mock = builderStub );
+				capture.setNotifier( notifierStub );
+			} );
+
+			it( "notifies once on a SEND verdict", function(){
+				capture.capture( newLogEvent() );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+			} );
+
+			it( "stays silent on a SUPPRESS verdict", function(){
+				throttleStub.$( "record", { action : "SUPPRESS", occurrence : 4, expiredDigest : {} } );
+				capture.capture( newLogEvent() );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+			} );
+
+			it( "flushes an expired window's digest alongside the new alert", function(){
+				throttleStub.$( "record", {
+					action        : "SEND",
+					occurrence    : 1,
+					expiredDigest : { signature : "sig-1", suppressedCount : 9 }
+				} );
+				capture.capture( newLogEvent() );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 2, "digest plus fresh alert" );
+			} );
+
+			it( "skips categories on the ignore list by prefix", function(){
+				capture.capture( newLogEvent( category = "cbmailservices.mail" ) );
+				capture.capture( newLogEvent( category = "coldbox.system.Bootstrap" ) );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				expect( throttleStub.$count( "record" ) ).toBe( 0, "ignored events never reach the throttle" );
+			} );
+
+			it( "does not skip categories that merely contain an ignored prefix mid-string", function(){
+				capture.capture( newLogEvent( category = "app.cbmailservices.wrapper" ) );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+			} );
+
+			it( "skips exception types on the ignore list", function(){
+				settings.ignoreExceptionTypes = [ "HarnessBoom" ];
+				capture.capture( newLogEvent( extraInfo = newExceptionInfo() ) );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+			} );
+
+			it( "flushDigests notifies one digest per expired seed", function(){
+				throttleStub.$( "flushExpired", [ { signature : "a" }, { signature : "b" } ] );
+				capture.flushDigests();
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 2 );
+			} );
+
+			it( "resolves the configured notifier through WireBox (the swap seam)", function(){
+				settings.notifier = "MyCustomNotifier@myModule";
+				var wireboxStub   = createStub();
+				wireboxStub.$( "getInstance", notifierStub );
+
+				var fresh = prepareMock( new errorAlerts.models.CaptureService() );
+				fresh.$property( propertyName = "settings", mock = settings );
+				fresh.$property( propertyName = "wirebox", mock = wireboxStub );
+
+				expect( fresh.getNotifier() ).toBe( notifierStub );
+				expect( wireboxStub.$callLog().getInstance[ 1 ][ 1 ] ).toBe( "MyCustomNotifier@myModule" );
+			} );
+
+			it( "swallows notifier failures instead of throwing into the request", function(){
+				var brokenNotifier = createStub();
+				brokenNotifier.$(
+					method         = "sendNotification",
+					throwException = true,
+					throwType      = "NotifierDown",
+					throwMessage   = "delivery exploded"
+				);
+				capture.setNotifier( brokenNotifier );
+
+				expect( function(){
+					capture.capture( newLogEvent() );
+				} ).notToThrow();
+			} );
+
+			it( "swallows pipeline failures instead of throwing into the request", function(){
+				signatureStub.$(
+					method         = "compute",
+					throwException = true,
+					throwType      = "HashDown",
+					throwMessage   = "hashing exploded"
+				);
+
+				expect( function(){
+					capture.capture( newLogEvent() );
+				} ).notToThrow();
+			} );
+		} );
+	}
+
+}

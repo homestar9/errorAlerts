@@ -1,0 +1,26 @@
+{
+    "name":"errorAlerts-adobe@2023",
+    "app":{
+        "serverHomeDirectory":".engine/adobe2023",
+        "cfengine":"adobe@2023"
+    },
+    "web":{
+        "http":{
+            "port":"60310"
+        },
+        "rewrites":{
+            "enable":"true"
+        },
+        "webroot":"test-harness",
+        "aliases":{
+            "/moduleroot/errorAlerts":"./"
+        }
+    },
+    "jvm":{
+        "heapSize":"512"
+    },
+    "openBrowser":false,
+    "scripts":{
+        "onServerInstall":"cfpm install zip,mail"
+    }
+}
