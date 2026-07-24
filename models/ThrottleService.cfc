@@ -10,6 +10,10 @@
  * State is an in-memory struct, per JVM by design: counters reset on restart or
  * fwreinit, and a pending digest is lost with them. On a web farm each instance
  * throttles independently, so N is effectively multiplied by instance count.
+ *
+ * Locking uses java.util.concurrent.locks.ReentrantLock instead of a CFML named
+ * lock: BoxLang 1.x named locks did not mutually exclude across cfthread bodies
+ * in testing, and the Java lock behaves identically on every engine.
  */
 component singleton accessors="true" {
 
@@ -17,12 +21,14 @@ component singleton accessors="true" {
 	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
 
 	/**
-	 * Constructor. Sets up the empty window registry and the System handle
-	 * used for stderr notes (this module never logs through LogBox).
+	 * Constructor. Sets up the empty window registry, the JVM lock, and the
+	 * System handle used for stderr notes (this module never logs through LogBox).
 	 */
 	function init(){
 		variables.windows = {};
 		variables.system  = createObject( "java", "java.lang.System" );
+		variables.mutex   = createObject( "java", "java.util.concurrent.locks.ReentrantLock" ).init();
+		variables.seconds = createObject( "java", "java.util.concurrent.TimeUnit" ).SECONDS;
 		return this;
 	}
 
@@ -34,10 +40,10 @@ component singleton accessors="true" {
 	 *     expiredDigest : {}   // digest seed when THIS call rolled over an
 	 *   }                      // expired window that had suppressions
 	 *
-	 * All struct work happens inside ONE named exclusive lock; the operations
-	 * are microseconds, so a single coarse lock is both correct and simple.
-	 * On lock timeout it fails OPEN and returns SEND: a rare duplicate email
-	 * beats a silently dropped alert.
+	 * All struct work happens under ONE coarse lock; the operations are
+	 * microseconds, so coarse is both correct and simple. If the lock cannot
+	 * be acquired it fails OPEN and returns SEND: a rare duplicate email beats
+	 * a silently dropped alert.
 	 *
 	 * @signature The error signature from SignatureService.
 	 * @snapshot  A compact struct describing this occurrence, kept for digests.
@@ -46,60 +52,64 @@ component singleton accessors="true" {
 		var result = { action : "SEND", occurrence : 1, expiredDigest : {} };
 		var nowMs  = getTickCount();
 
-		try {
-			lock name="errorAlerts-throttle" type="exclusive" timeout="5" throwOnTimeout="true" {
-				// Roll an expired window first; its suppressions become the digest seed.
-				if (
-					variables.windows.keyExists( arguments.signature )
-					&& nowMs >= variables.windows[ arguments.signature ].windowStart + settings.throttle.windowSeconds * 1000
-				) {
-					if ( variables.windows[ arguments.signature ].suppressedCount > 0 ) {
-						result.expiredDigest = buildSeed( arguments.signature, variables.windows[ arguments.signature ] );
-					}
-					variables.windows.delete( arguments.signature );
-				}
+		if ( !acquire() ) {
+			return result;
+		}
 
-				// First occurrence in a window: open it and send.
-				if ( !variables.windows.keyExists( arguments.signature ) ) {
-					if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
-						evictExpired( nowMs );
-					}
-					if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
-						// Fail open: send the alert but track nothing, so a flood of
-						// unique signatures cannot grow memory without bound.
-						variables.system.err.println(
-							"errorAlerts throttle is tracking #settings.throttle.maxTrackedSignatures# signatures; sending untracked."
-						);
-						return result;
-					}
-					variables.windows[ arguments.signature ] = {
-						windowStart     : nowMs,
-						sentCount       : 1,
-						totalCount      : 1,
-						suppressedCount : 0,
-						firstSeen       : now(),
-						lastSeen        : now(),
-						lastEvent       : arguments.snapshot
-					};
+		try {
+			// Roll an expired window first; its suppressions become the digest seed.
+			if (
+				variables.windows.keyExists( arguments.signature )
+				&& nowMs >= variables.windows[ arguments.signature ].windowStart + settings.throttle.windowSeconds * 1000
+			) {
+				if ( variables.windows[ arguments.signature ].suppressedCount > 0 ) {
+					result.expiredDigest = buildSeed( arguments.signature, variables.windows[ arguments.signature ] );
+				}
+				variables.windows.delete( arguments.signature );
+			}
+
+			// First occurrence in a window: open it and send.
+			if ( !variables.windows.keyExists( arguments.signature ) ) {
+				if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
+					evictExpired( nowMs );
+				}
+				if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
+					// Fail open: send the alert but track nothing, so a flood of
+					// unique signatures cannot grow memory without bound.
+					variables.system.err.println(
+						"errorAlerts throttle is tracking #settings.throttle.maxTrackedSignatures# signatures; sending untracked."
+					);
 					return result;
 				}
+				variables.windows[ arguments.signature ] = {
+					windowStart     : nowMs,
+					sentCount       : 1,
+					totalCount      : 1,
+					suppressedCount : 0,
+					firstSeen       : now(),
+					lastSeen        : now(),
+					lastEvent       : arguments.snapshot
+				};
+				return result;
+			}
 
-				// A live window: count the occurrence, send only below the cap.
-				var entry = variables.windows[ arguments.signature ];
-				entry.totalCount++;
-				entry.lastSeen    = now();
-				entry.lastEvent   = arguments.snapshot;
-				result.occurrence = entry.totalCount;
-				if ( entry.sentCount < settings.throttle.maxPerWindow ) {
-					entry.sentCount++;
-				} else {
-					entry.suppressedCount++;
-					result.action = "SUPPRESS";
-				}
+			// A live window: count the occurrence, send only below the cap.
+			var entry = variables.windows[ arguments.signature ];
+			entry.totalCount++;
+			entry.lastSeen    = now();
+			entry.lastEvent   = arguments.snapshot;
+			result.occurrence = entry.totalCount;
+			if ( entry.sentCount < settings.throttle.maxPerWindow ) {
+				entry.sentCount++;
+			} else {
+				entry.suppressedCount++;
+				result.action = "SUPPRESS";
 			}
 		} catch ( any e ) {
 			// Fail OPEN (verdict stays SEND): a duplicate beats a dropped alert.
 			variables.system.err.println( "errorAlerts throttle failed open: #e.message#" );
+		} finally {
+			variables.mutex.unlock();
 		}
 
 		return result;
@@ -115,21 +125,25 @@ component singleton accessors="true" {
 		var seeds = [];
 		var nowMs = getTickCount();
 
+		if ( !acquire() ) {
+			return seeds;
+		}
+
 		try {
-			lock name="errorAlerts-throttle" type="exclusive" timeout="5" throwOnTimeout="true" {
-				// Iterate a key copy so deleting entries mid-loop is safe.
-				for ( var signature in variables.windows.keyArray() ) {
-					var entry = variables.windows[ signature ];
-					if ( nowMs >= entry.windowStart + settings.throttle.windowSeconds * 1000 ) {
-						if ( entry.suppressedCount > 0 ) {
-							seeds.append( buildSeed( signature, entry ) );
-						}
-						variables.windows.delete( signature );
+			// Iterate a key copy so deleting entries mid-loop is safe.
+			for ( var signature in variables.windows.keyArray() ) {
+				var entry = variables.windows[ signature ];
+				if ( nowMs >= entry.windowStart + settings.throttle.windowSeconds * 1000 ) {
+					if ( entry.suppressedCount > 0 ) {
+						seeds.append( buildSeed( signature, entry ) );
 					}
+					variables.windows.delete( signature );
 				}
 			}
 		} catch ( any e ) {
 			variables.system.err.println( "errorAlerts digest flush failed: #e.message#" );
+		} finally {
+			variables.mutex.unlock();
 		}
 
 		return seeds;
@@ -140,15 +154,35 @@ component singleton accessors="true" {
 	 * a clean slate (e.g. after changing throttle settings at runtime).
 	 */
 	void function reset(){
-		lock name="errorAlerts-throttle" type="exclusive" timeout="5" {
+		if ( !acquire() ) {
+			return;
+		}
+		try {
 			variables.windows = {};
+		} finally {
+			variables.mutex.unlock();
 		}
 	}
 
 	/**
+	 * Acquires the mutex, waiting up to 5 seconds. Returns false (after one
+	 * stderr note) instead of throwing, so every caller can fail open.
+	 */
+	private boolean function acquire(){
+		try {
+			if ( variables.mutex.tryLock( javacast( "long", 5 ), variables.seconds ) ) {
+				return true;
+			}
+		} catch ( any e ) {
+		}
+		variables.system.err.println( "errorAlerts throttle lock unavailable; failing open." );
+		return false;
+	}
+
+	/**
 	 * Deletes every expired window without collecting digests. Only called when
-	 * the registry hits maxTrackedSignatures, so losing a rare digest at the
-	 * cap is accepted in exchange for bounded memory.
+	 * the registry hits maxTrackedSignatures (and already under the mutex), so
+	 * losing a rare digest at the cap is accepted in exchange for bounded memory.
 	 *
 	 * @nowMs The current tick count, passed in so record() and this agree on "now".
 	 */

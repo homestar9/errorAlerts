@@ -1,23 +1,30 @@
 {
     "name":"errorAlerts-boxlang@1",
     "app":{
-        "serverHomeDirectory":".engine/boxlang1",
-        "cfengine":"boxlang-cfml@1"
+        "serverHomeDirectory":".engine/boxlang-cfml",
+        "cfengine":"boxlang@1"
+    },
+    "fusionreactor":{
+        "enable":false
     },
     "web":{
         "http":{
             "port":"60310"
         },
         "rewrites":{
-            "enable":"true"
+            "enable":true
         },
         "webroot":"test-harness",
         "aliases":{
             "/moduleroot/errorAlerts":"./"
         }
     },
-    "jvm":{
-        "heapSize":"512"
+    "JVM":{
+        "heapSize":"512",
+        "javaVersion":"openjdk21_jre"
     },
-    "openBrowser":false
+    "openBrowser":false,
+    "scripts":{
+        "onServerInitialInstall":"install bx-compat-cfml --noSave && install bx-esapi --noSave && install bx-mail --noSave"
+    }
 }

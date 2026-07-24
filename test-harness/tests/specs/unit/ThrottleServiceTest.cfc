@@ -111,20 +111,26 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "does not lose counts under concurrent recording", function(){
-				// Threads read `service`/`snapshot` from the spec's variables scope:
-				// thread ATTRIBUTES are deep-copied on Adobe CF, which would hand
-				// each thread its own ThrottleService copy and prove nothing.
-				var threadNames = [];
+				/* Threads read `service`/`snapshot` from the spec's variables scope:
+				 * thread ATTRIBUTES are deep-copied on Adobe CF, which would hand
+				 * each thread its own ThrottleService copy and prove nothing.
+				 * Completion is detected via the shared `done` struct instead of
+				 * thread-join, because join inside a closure is a no-op on BoxLang. */
+				done = {};
 				for ( var t = 1; t <= 4; t++ ) {
-					var threadName = "throttleSmoke#t##createUUID()#";
-					threadNames.append( threadName );
-					thread name="#threadName#" {
+					thread name="throttleSmoke#t##createUUID()#" {
 						for ( var i = 1; i <= 50; i++ ) {
 							service.record( "sig-threaded", snapshot );
 						}
+						done[ createUUID() ] = true;
 					}
 				}
-				thread action="join" name="#threadNames.toList()#" timeout="10000";
+
+				var deadline = getTickCount() + 10000;
+				while ( done.count() < 4 && getTickCount() < deadline ) {
+					sleep( 25 );
+				}
+				expect( done.count() ).toBe( 4, "all worker threads should finish within 10s" );
 
 				var verdict = service.record( "sig-threaded", snapshot );
 				expect( verdict.occurrence ).toBe( 201, "4 threads x 50 records + this one should count 201" );
