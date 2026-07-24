@@ -1,22 +1,16 @@
 /**
  * EmailRenderer
  *
- * Renders payload structs into HTML that survives Gmail. Gmail strips <style>
- * blocks, classes, and scripts, so everything here is nested tables with
- * inline style attributes only -- the classic HTML-email discipline. There is
- * no writeDump() anywhere: scopes arrive pre-sanitized as flat key/value
- * structs from PayloadBuilder and render as plain rows.
- *
- * Size control: sections are assembled in priority order (message, exception,
- * request, rc, extra info) and dropped once settings.maxBodyBytes would be
- * exceeded. The header and footer always ship.
+ * Renders payload structs as table-based HTML with inline styles.
+ * PayloadBuilder sanitizes request data before it reaches this component.
+ * Sections are added in priority order until the character budget is used.
  */
 component singleton accessors="true" {
 
-	// Injected properties
+	// WireBox injects the module settings.
 	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
 
-	// Shared inline-style fragments. Doubled ## renders a literal # (hex colors).
+	// Reuse these inline styles. CFML renders ## as one # in color values.
 	variables.FONT       = "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
 	variables.MONO       = "font-family:Consolas,Menlo,'Courier New',monospace;";
 	variables.LABEL_CELL = "padding:4px 10px 4px 0;vertical-align:top;white-space:nowrap;color:##71717a;font-size:12px;#variables.FONT#";
@@ -24,7 +18,9 @@ component singleton accessors="true" {
 	variables.TITLE      = "margin:0 0 6px 0;color:##3f3f46;font-size:13px;font-weight:bold;#variables.FONT#";
 
 	/**
-	 * Renders one "error" alert email.
+	 * renderError
+	 *
+	 * Renders one error alert email.
 	 *
 	 * @payload The error payload from PayloadBuilder.build().
 	 */
@@ -52,7 +48,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Renders one "digest" email summarizing a suppressed burst.
+	 * renderDigest
+	 *
+	 * Renders a digest for suppressed occurrences.
 	 *
 	 * @payload The digest payload from PayloadBuilder.buildDigest().
 	 */
@@ -79,16 +77,17 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Assembles header + middle sections + footer under the size cap. Middle
-	 * sections are dropped (in reverse priority) once the budget runs out, and
-	 * a truncation notice row marks the cut.
+	 * assemble
+	 *
+	 * Adds sections in order until the configured character budget is reached.
+	 * Stops at the first section that does not fit and adds a notice.
 	 *
 	 * @head    The header row html.
 	 * @middle  The array of middle section rows, in priority order.
 	 * @foot    The footer row html.
 	 */
 	private string function assemble( required string head, required array middle, required string foot ){
-		// 600 covers the outer wrapper markup plus a truncation notice.
+		// Reserve 600 characters for the wrapper and truncation notice.
 		var budget    = settings.maxBodyBytes - arguments.head.len() - arguments.foot.len() - 600;
 		var kept      = [];
 		var truncated = false;
@@ -114,8 +113,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Wraps assembled rows in the outer document tables: a full-width gray
-	 * background holding one centered 640px white card.
+	 * wrapDocument
+	 *
+	 * Wraps the rows in the outer email tables.
 	 *
 	 * @inner The concatenated <tr> rows of the card.
 	 */
@@ -128,8 +128,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * The red header band for error alerts: severity, app, environment,
-	 * timestamp, and which occurrence of the window this is.
+	 * errorHeader
+	 *
+	 * Renders the error heading and occurrence details.
 	 *
 	 * @payload The error payload.
 	 */
@@ -151,7 +152,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * The amber header band for digest emails.
+	 * digestHeader
+	 *
+	 * Renders the digest heading and suppressed count.
 	 *
 	 * @payload The digest payload.
 	 */
@@ -172,7 +175,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * The error message itself, monospace and pre-wrapped, clipped to 2KB.
+	 * messageSection
+	 *
+	 * Renders the first 2,048 characters of the message.
 	 *
 	 * @payload The payload carrying `message`.
 	 */
@@ -181,8 +186,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * The exception block: type + detail rows, then the stack frames as
-	 * numbered "template:line" rows with alternating backgrounds.
+	 * exceptionSection
+	 *
+	 * Renders the exception type, detail, and stack frames.
 	 *
 	 * @exception The payload.exception struct.
 	 */
@@ -214,10 +220,12 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Renders a flat struct as a label/value table section.
+	 * kvSection
+	 *
+	 * Renders a flat struct as a label and value table.
 	 *
 	 * @title The section title.
-	 * @data  The flat struct to render; values are already bounded strings.
+	 * @data  The flat struct to render.
 	 */
 	private string function kvSection( required string title, required struct data ){
 		var rows = [];
@@ -234,8 +242,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Wraps section content in the standard card row: padded cell, small title,
-	 * light divider above.
+	 * section
+	 *
+	 * Wraps a title and body in a standard email row.
 	 *
 	 * @title The section title.
 	 * @body  The section content html.
@@ -248,7 +257,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * A monospace, pre-wrapped, escaped text block (for messages and details).
+	 * preBlock
+	 *
+	 * Escapes text and renders it in a pre-wrapped block.
 	 *
 	 * @text The raw text to display.
 	 */
@@ -257,7 +268,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * The footer: signature hash, module version, and the throttle explainer.
+	 * footer
+	 *
+	 * Renders the throttle note, signature, and module version.
 	 *
 	 * @payload The payload carrying signature/moduleVersion.
 	 */
@@ -273,8 +286,10 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * HTML-encodes any value for safe embedding; complex values are serialized
-	 * first and anything unrenderable becomes a placeholder instead of a throw.
+	 * esc
+	 *
+	 * Converts a value to HTML-safe text.
+	 * Returns a placeholder when conversion fails.
 	 *
 	 * @value The value to encode.
 	 */
@@ -287,7 +302,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Formats a timestamp consistently for display.
+	 * stamp
+	 *
+	 * Formats a timestamp for display.
 	 *
 	 * @value The date/time to format.
 	 */

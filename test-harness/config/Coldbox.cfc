@@ -1,46 +1,47 @@
 /**
- * Harness ColdBox configuration. Deliberately mirrors a HOST app that defines
- * its own `exceptionHandler`: with one configured, ColdBox never logs unhandled
- * exceptions through LogBox, so the suite exercises the module's onException
- * interceptor path -- the path real hosts like northbaywaterheaters-web use.
+ * Configures a host application with a custom exceptionHandler.
+ * ColdBox does not log unhandled exceptions in this setup, so tests use the
+ * module's onException interceptor.
  */
 component {
 
 	/**
-	 * Configures the harness application.
+	 * configure
+	 *
+	 * Configures the test harness.
 	 */
 	function configure(){
-		// coldbox directives
+		// Configure ColdBox request and exception handling.
 		variables.coldbox = {
-			// Application Setup
+			// Name the test application.
 			appName                 : "errorAlerts Harness",
-			// Development Settings
+			// Reload handlers during development.
 			reinitPassword          : "",
 			handlersIndexAutoReload : true,
 			modulesExternalLocation : [],
-			// Implicit Events
+			// Set the default handler action.
 			defaultEvent            : "Main.index",
-			// Error/Exception Handling: a custom handler, like a real host.
+			// Use a custom exception handler to test the interceptor path.
 			exceptionHandler        : "main.onException",
 			customErrorTemplate     : "",
-			// Application Aspects
+			// Disable caches so tests use current handlers and events.
 			handlerCaching          : false,
 			eventCaching            : false
 		};
 
-		// The harness always runs on the loopback, so this always matches.
+		// Treat loopback requests as the development environment.
 		variables.environments = { development : "localhost,127\.0\.0\.1" };
 
-		// LogBox: console only. The module adds its own appender at onLoad.
+		// Start with the console appender. The module adds its appender on load.
 		variables.logBox = {
 			appenders : { console : { class : "ConsoleAppender" } },
 			root      : { levelmax : "INFO", appenders : "*" },
 			info      : [ "coldbox.system" ]
 		};
 
-		// Module Settings
+		// Configure dependencies and the module under test.
 		variables.moduleSettings = {
-			// The InMemory mailer lets specs assert on sent mail synchronously.
+			// Keep sent mail in memory so tests can inspect it.
 			cbmailservices : {
 				defaultProtocol : "default",
 				mailers         : { "default" : { class : "InMemory" } },
@@ -50,18 +51,18 @@ component {
 				to            : "alerts@example.com",
 				from          : "harness@example.com",
 				subjectPrefix : "[Harness]",
-				// The harness runs in "development", which the module skips by
-				// default -- allow it explicitly, which also exercises the
-				// environments allow-list.
+				// Allow the development environment used by the test server.
 				environments  : [ "development" ],
-				// Synchronous delivery so specs can assert the mailbox immediately.
+				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send"
 			}
 		};
 	}
 
 	/**
-	 * Loads the module under test from the repo root after the app starts.
+	 * afterAspectsLoad
+	 *
+	 * Loads the module from the repository after the application starts.
 	 */
 	function afterAspectsLoad( event, interceptData, rc, prc ){
 		controller

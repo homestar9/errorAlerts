@@ -1,21 +1,19 @@
 /**
  * errorAlerts Scheduler
+ *
  * Auto-registered by ColdBox as `cbScheduler@errorAlerts`.
  */
 component {
 
 	/**
-	 * Schedules the digest flush. Without it, a digest for a burst of suppressed
-	 * errors would wait for the NEXT error to roll its window over. On a quiet
-	 * site that could be hours away, so this sweep runs on a timer instead.
+	 * configure
 	 *
-	 * The task swallows its own failures on purpose: nothing in this module may
-	 * log at ERROR, because that would feed the very appender this task powers.
-	 * When the module is inactive the throttle state is empty and the flush is
-	 * a no-op, so the task is safe to register unconditionally.
+	 * Schedules regular checks for expired throttle windows.
+	 * Without this task, a quiet window cannot produce a digest until the next
+	 * matching error arrives.
 	 */
 	function configure(){
-		// Read the cadence from settings, falling back to 60s if unavailable.
+		// Use 60 seconds when the module settings are unavailable.
 		var flushSeconds = 60;
 		try {
 			flushSeconds = getInstance( dsl = "coldbox:moduleSettings:errorAlerts" ).digestFlushSeconds;
@@ -29,7 +27,8 @@ component {
 			.every( flushSeconds, "seconds" )
 			.delay( flushSeconds, "seconds" )
 			.onFailure( function( task, exception ){
-				// Swallowed on purpose: see the configure() docblock.
+				// Do not log this failure because an error log would call the
+				// module's appender again.
 			} );
 	}
 

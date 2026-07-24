@@ -1,29 +1,28 @@
 /**
- * Test suite bootstrap: maps /root at the harness and /errorAlerts at the repo
- * root, then boots the ColdBox virtual application per request.
+ * Maps the test and module paths and starts a ColdBox virtual application.
  */
 component {
 
-	// The name of the module used in cfmappings, etc.
+	// Name the module used in CFML mappings.
 	request.MODULE_NAME = "errorAlerts";
-	// The directory name of the module on disk (the repo root folder name).
+	// Name the module's repository directory.
 	request.MODULE_PATH = "errorAlerts";
 
-	// APPLICATION CFC PROPERTIES
+	// Configure the test application.
 	this.name               = "#request.MODULE_NAME#-testing-suite";
 	this.sessionManagement  = true;
 	this.sessionTimeout     = createTimespan( 0, 0, 15, 0 );
 	this.applicationTimeout = createTimespan( 0, 0, 15, 0 );
 	this.setClientCookies   = true;
 
-	// Create testing mapping
+	// Map the test directory.
 	this.mappings[ "/tests" ] = getDirectoryFromPath( getCurrentTemplatePath() );
 
-	// The application root
+	// Map the harness application root.
 	rootPath                 = reReplaceNoCase( this.mappings[ "/tests" ], "tests(\\|/)", "" );
 	this.mappings[ "/root" ] = rootPath;
 
-	// The module root path
+	// Find and map the module repository.
 	moduleRootPath = reReplaceNoCase(
 		rootPath,
 		"#request.MODULE_PATH#(\\|/)test-harness(\\|/)",
@@ -33,17 +32,17 @@ component {
 	this.mappings[ "/#request.MODULE_NAME#" ] = moduleRootPath & "#request.MODULE_PATH#";
 
 	public boolean function onRequestStart( required targetPage ){
-		// Set a high timeout for long running tests
+		// Allow enough time for the complete suite.
 		setting requestTimeout   ="9999";
-		// New ColdBox Virtual Application Starter
+		// Create a virtual application for this request.
 		request.coldBoxVirtualApp = new coldbox.system.testing.VirtualApp( appMapping = "/root" );
 
-		// If hitting the runner or specs, prep our virtual app
+		// Start the virtual application for test runner and spec requests.
 		if ( getBaseTemplatePath().replace( expandPath( "/tests" ), "" ).reFindNoCase( "(runner|specs)" ) ) {
 			request.coldBoxVirtualApp.startup();
 		}
 
-		// Reload for fresh results
+		// Restart when the request asks for a framework reinitialization.
 		if ( url.keyExists( "fwreinit" ) ) {
 			if ( server.keyExists( "lucee" ) ) {
 				pagePoolClear();

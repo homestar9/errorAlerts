@@ -1,28 +1,26 @@
 /**
  * ThrottleService
  *
- * Tracks how often each error signature fires and decides SEND vs SUPPRESS.
- * Semantics: a FIXED window anchored at the signature's first occurrence. The
- * first `maxPerWindow` occurrences send immediately; the rest are counted. When
- * the window expires (rolled by the next occurrence, or swept by the scheduled
- * flush), any suppressed count becomes one digest seed.
+ * Counts each error signature during a fixed window. The first
+ * `maxPerWindow` occurrences are sent, and later occurrences are included in
+ * one digest after the window expires.
  *
- * State is an in-memory struct, per JVM by design: counters reset on restart or
- * fwreinit, and a pending digest is lost with them. On a web farm each instance
- * throttles independently, so N is effectively multiplied by instance count.
+ * Counts are stored in memory for one JVM. A restart clears the counts and any
+ * pending digest. Each server in a cluster keeps its own counts.
  *
- * Locking uses java.util.concurrent.locks.ReentrantLock instead of a CFML named
- * lock: BoxLang 1.x named locks did not mutually exclude across cfthread bodies
- * in testing, and the Java lock behaves identically on every engine.
+ * BoxLang 1.x did not enforce CFML named locks across cfthread bodies in the
+ * concurrency test. ReentrantLock provides the required shared lock on both
+ * supported engines.
  */
 component singleton accessors="true" {
 
-	// Injected properties
+	// WireBox injects the module settings.
 	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
 
 	/**
-	 * Constructor. Sets up the empty window registry, the JVM lock, and the
-	 * System handle used for stderr notes (this module never logs through LogBox).
+	 * init
+	 *
+	 * Creates the window registry, shared lock, and System.err writer.
 	 */
 	function init(){
 		variables.windows = {};
@@ -33,17 +31,18 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Records one occurrence of a signature and returns the verdict:
+	 * record
+	 *
+	 * Records one occurrence and returns this result:
 	 *   {
 	 *     action        : "SEND" | "SUPPRESS",
-	 *     occurrence    : n,   // position within the current window
-	 *     expiredDigest : {}   // digest seed when THIS call rolled over an
-	 *   }                      // expired window that had suppressions
+	 *     occurrence    : n,
+	 *     expiredDigest : {}
+	 *   }
 	 *
-	 * All struct work happens under ONE coarse lock; the operations are
-	 * microseconds, so coarse is both correct and simple. If the lock cannot
-	 * be acquired it fails OPEN and returns SEND: a rare duplicate email beats
-	 * a silently dropped alert.
+	 * expiredDigest contains a digest when this call closes an expired window.
+	 * If the lock cannot be acquired, the method returns SEND so the alert is
+	 * not lost.
 	 *
 	 * @signature The error signature from SignatureService.
 	 * @snapshot  A compact struct describing this occurrence, kept for digests.
@@ -57,7 +56,7 @@ component singleton accessors="true" {
 		}
 
 		try {
-			// Roll an expired window first; its suppressions become the digest seed.
+			// Close an expired window before recording the new occurrence.
 			if (
 				variables.windows.keyExists( arguments.signature )
 				&& nowMs >= variables.windows[ arguments.signature ].windowStart + settings.throttle.windowSeconds * 1000
@@ -68,14 +67,14 @@ component singleton accessors="true" {
 				variables.windows.delete( arguments.signature );
 			}
 
-			// First occurrence in a window: open it and send.
+			// Start a window for the first occurrence.
 			if ( !variables.windows.keyExists( arguments.signature ) ) {
 				if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
 					evictExpired( nowMs );
 				}
 				if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
-					// Fail open: send the alert but track nothing, so a flood of
-					// unique signatures cannot grow memory without bound.
+					// Send without tracking when the registry is still full.
+					// This keeps memory bounded without dropping the alert.
 					variables.system.err.println(
 						"errorAlerts throttle is tracking #settings.throttle.maxTrackedSignatures# signatures; sending untracked."
 					);
@@ -93,7 +92,7 @@ component singleton accessors="true" {
 				return result;
 			}
 
-			// A live window: count the occurrence, send only below the cap.
+			// Count the occurrence and suppress it after the send limit.
 			var entry = variables.windows[ arguments.signature ];
 			entry.totalCount++;
 			entry.lastSeen    = now();
@@ -106,7 +105,7 @@ component singleton accessors="true" {
 				result.action = "SUPPRESS";
 			}
 		} catch ( any e ) {
-			// Fail OPEN (verdict stays SEND): a duplicate beats a dropped alert.
+			// Keep the SEND result so an internal error cannot drop the alert.
 			variables.system.err.println( "errorAlerts throttle failed open: #e.message#" );
 		} finally {
 			variables.mutex.unlock();
@@ -116,10 +115,10 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Sweeps ALL expired windows and returns an array of digest seeds for the
-	 * ones that suppressed anything. Every expired window is deleted either
-	 * way. The scheduled task calls this so digests are never stranded when
-	 * traffic stops after a burst.
+	 * flushExpired
+	 *
+	 * Deletes expired windows and returns digests for those with suppressions.
+	 * The scheduled task calls this when no new error closes the window.
 	 */
 	array function flushExpired(){
 		var seeds = [];
@@ -130,7 +129,7 @@ component singleton accessors="true" {
 		}
 
 		try {
-			// Iterate a key copy so deleting entries mid-loop is safe.
+			// Iterate over copied keys so entries can be deleted during the loop.
 			for ( var signature in variables.windows.keyArray() ) {
 				var entry = variables.windows[ signature ];
 				if ( nowMs >= entry.windowStart + settings.throttle.windowSeconds * 1000 ) {
@@ -150,8 +149,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Clears all throttle state. Used by tests and available to hosts that want
-	 * a clean slate (e.g. after changing throttle settings at runtime).
+	 * reset
+	 *
+	 * Clears every throttle window.
 	 */
 	void function reset(){
 		if ( !acquire() ) {
@@ -165,8 +165,10 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Acquires the mutex, waiting up to 5 seconds. Returns false (after one
-	 * stderr note) instead of throwing, so every caller can fail open.
+	 * acquire
+	 *
+	 * Waits up to five seconds for the shared lock.
+	 * Returns false and writes to System.err when the lock is unavailable.
 	 */
 	private boolean function acquire(){
 		try {
@@ -180,11 +182,13 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Deletes every expired window without collecting digests. Only called when
-	 * the registry hits maxTrackedSignatures (and already under the mutex), so
-	 * losing a rare digest at the cap is accepted in exchange for bounded memory.
+	 * evictExpired
 	 *
-	 * @nowMs The current tick count, passed in so record() and this agree on "now".
+	 * Deletes expired windows without creating digests.
+	 * record() calls this while holding the lock when the registry is full.
+	 * Suppressed counts in these windows are lost to keep memory bounded.
+	 *
+	 * @nowMs The tick count already used by record().
 	 */
 	private void function evictExpired( required numeric nowMs ){
 		for ( var signature in variables.windows.keyArray() ) {
@@ -195,8 +199,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Builds the digest seed for an expired window: everything PayloadBuilder
-	 * needs to describe the burst without holding onto the window itself.
+	 * buildSeed
+	 *
+	 * Returns the expired window fields needed to build a digest.
 	 *
 	 * @signature The error signature the window belongs to.
 	 * @entry     The window entry being retired.

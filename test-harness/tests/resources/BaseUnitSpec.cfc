@@ -1,18 +1,17 @@
 /**
- * Base for unit specs. Loads the virtual ColdBox app once (so the /errorAlerts
- * mapping, WireBox, and module settings exist) and keeps it alive between
- * bundles -- restarting per file multiplies suite time with no isolation gain.
- * Specs build their objects with `new` + $property() mocks, so they stay unit
- * tests despite the loaded app.
+ * Loads the shared ColdBox services and fixtures used by unit specs.
+ * Individual specs still create and mock the objects they test.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 
-	// Load on first test, keep alive between bundles.
+	// Load ColdBox once and share it across test bundles.
 	this.loadColdBox   = true;
 	this.unloadColdBox = false;
 
 	/**
-	 * Wires the spec itself so getInstance() and injections work.
+	 * beforeAll
+	 *
+	 * Connects this spec to WireBox before its tests run.
 	 */
 	function beforeAll(){
 		super.beforeAll();
@@ -20,8 +19,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	}
 
 	/**
-	 * The default module settings struct used by unit specs, mirroring
-	 * ModuleConfig.configure(). Override individual keys per spec.
+	 * defaultSettings
+	 *
+	 * Returns the default module settings used by unit tests.
 	 */
 	struct function defaultSettings(){
 		return {
@@ -58,7 +58,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	}
 
 	/**
-	 * Builds a LogBox LogEvent fixture.
+	 * newLogEvent
+	 *
+	 * Builds a LogBox event for a test.
 	 *
 	 * @message   The log message.
 	 * @severity  The numeric severity (1 = ERROR).
@@ -75,7 +77,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	}
 
 	/**
-	 * Builds a cfcatch-shaped struct fixture for exception scenarios.
+	 * newExceptionInfo
+	 *
+	 * Builds exception data for a test.
 	 *
 	 * @template The template of the top stack frame.
 	 * @line     The line of the top stack frame.

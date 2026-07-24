@@ -1,20 +1,19 @@
 /**
  * ErrorAlertAppender
  *
- * The LogBox appender the module registers on the host's root logger. It is
- * deliberately dumb: LogBox already filtered by level (only events inside the
- * registered levelMin..levelMax range reach logMessage), so this component only
- * runs two cheap guards and hands the event to CaptureService.
+ * Receives root logger events that match the registered severity range and
+ * passes them to CaptureService.
  *
- * LogBox instantiates appenders itself via `new` -- NOT through WireBox -- so
- * `property inject` does not work here. All testable logic therefore lives in
- * WireBox singletons that this appender resolves lazily through getWireBox().
+ * LogBox creates appenders directly instead of using WireBox, so injected
+ * properties are unavailable. This component resolves CaptureService through
+ * the injector provided by LogBox.
  */
 component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 
 	/**
-	 * Constructor. LogBox calls this with the arguments given to
-	 * registerAppender(); everything defers to the abstract base.
+	 * init
+	 *
+	 * Passes the LogBox registration arguments to AbstractAppender.
 	 *
 	 * @name       The unique name for this appender.
 	 * @properties A map of configuration properties for the appender.
@@ -34,14 +33,14 @@ component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 	}
 
 	/**
-	 * Receives one qualifying log event and delegates to CaptureService.
+	 * logMessage
 	 *
-	 * Loop protection, in order:
-	 * 1. A request-scope flag bails out when an error thrown while we were
-	 *    already capturing tries to re-enter this appender.
-	 * 2. Events logged under this module's own categories are skipped.
-	 * 3. Any internal failure goes to System.err only. It is NEVER rethrown and
-	 *    NEVER logged through LogBox -- either would loop straight back here.
+	 * Sends one log event to CaptureService.
+	 * The request flag must be checked before capture. Moving it later would
+	 * allow an error during capture to enter this appender again.
+	 * Events from this module are skipped so its own errors do not create alerts.
+	 * Internal failures go to System.err because LogBox would call this appender
+	 * again for another matching error.
 	 *
 	 * @logEvent The LogBox LogEvent being logged.
 	 */
@@ -58,7 +57,7 @@ component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 		try {
 			getCaptureService().capture( arguments.logEvent );
 		} catch ( any e ) {
-			// variables.system comes from AbstractAppender's pseudo-constructor.
+			// AbstractAppender creates variables.system before this method runs.
 			variables.system.err.println( "errorAlerts appender failed: #e.message# #e.detail#" );
 		} finally {
 			request.delete( "_errorAlertsCapturing" );
@@ -68,8 +67,9 @@ component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 	}
 
 	/**
-	 * Lazily resolves and caches CaptureService through whichever injector
-	 * reference LogBox wired onto this appender at registration time.
+	 * getCaptureService
+	 *
+	 * Loads CaptureService once from the available WireBox injector.
 	 */
 	private any function getCaptureService(){
 		if ( !variables.keyExists( "captureService" ) ) {
@@ -79,9 +79,10 @@ component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 	}
 
 	/**
-	 * Returns a usable WireBox injector. In a ColdBox app, LogBox is created
-	 * with the CONTROLLER reference but an empty wirebox one, so getWireBox()
-	 * returns "" here -- reach through the controller instead.
+	 * getInjector
+	 *
+	 * Returns the injector stored by LogBox.
+	 * Falls back to the ColdBox controller when getWireBox() is empty.
 	 */
 	private any function getInjector(){
 		if ( !isSimpleValue( getWireBox() ) ) {

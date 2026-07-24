@@ -1,6 +1,5 @@
 /**
- * Unit tests for SignatureService: hash stability, what changes the hash, and
- * the digit/UUID normalization that folds id-bearing messages together.
+ * Tests signature stability, input changes, and ID normalization.
  */
 component extends="tests.resources.BaseUnitSpec" {
 

@@ -1,26 +1,24 @@
 /**
  * UnhandledExceptionCapture
  *
- * Listens to ColdBox's `onException` interception point, which Bootstrap
- * announces for EVERY unhandled exception. This is the only reliable hook when
- * a host defines its own `exceptionHandler` setting: in that case ColdBox runs
- * the handler and never logs the exception through LogBox, so the module's
- * appender alone would miss it.
+ * Receives unhandled exceptions from ColdBox's onException interception point.
+ * ColdBox does not log the exception when an application has a custom
+ * exceptionHandler, so ErrorAlertAppender cannot capture it in that case.
  *
- * Hosts WITHOUT a custom exceptionHandler get the same exception logged by
- * Bootstrap under the "coldbox.system.Bootstrap" category as well; that
- * category sits in the default ignoreCategories list precisely so those hosts
- * are not alerted twice for one crash.
+ * Without a custom handler, ColdBox also logs the exception under
+ * coldbox.system.Bootstrap. The default ignore list skips that event to prevent
+ * a second alert for the same exception.
  */
 component extends="coldbox.system.Interceptor" {
 
 	property name="captureService" inject="CaptureService@errorAlerts";
 
 	/**
-	 * Wraps the unhandled exception in a LogBox LogEvent and feeds it through
-	 * the same capture pipeline the appender uses, so throttling and rendering
-	 * treat both sources identically. Shares the appender's request-scope
-	 * re-entrancy flag: an exception thrown DURING capture must not re-enter.
+	 * onException
+	 *
+	 * Converts an unhandled exception to a LogEvent and captures it.
+	 * The request flag must be checked before capture. Moving it later would
+	 * allow an exception during capture to enter this method again.
 	 *
 	 * @event  The current request context.
 	 * @data   The interception data. `data.exception` holds the cfcatch struct.
@@ -40,8 +38,8 @@ component extends="coldbox.system.Interceptor" {
 		request._errorAlertsCapturing = true;
 		try {
 			var exception = arguments.data.exception;
-			// cfcatch objects are struct-like but not true structs on Adobe CF,
-			// so key access uses structKeyExists() instead of the member form.
+			// Adobe ColdFusion cfcatch values can be objects instead of structs.
+			// Use structKeyExists() so both forms can be read safely.
 			var message   = "Unhandled exception: "
 			& ( structKeyExists( exception, "message" ) ? exception.message : "" )
 			& " "
@@ -50,7 +48,7 @@ component extends="coldbox.system.Interceptor" {
 			captureService.capture(
 				new coldbox.system.logging.LogEvent(
 					message   = message,
-					severity  = 1, // ERROR
+					severity  = 1, // LogBox ERROR
 					extraInfo = exception,
 					category  = "UnhandledException"
 				)

@@ -1,52 +1,45 @@
 /**
- * Build process for the errorAlerts module. Copied from the caffeinecms build
- * and trimmed: no docs target, smaller exclude list. The zip-entry-count guard
- * stays -- it is what catches an ignore pattern eating source files before a
- * broken package ships.
+ * Builds and verifies the errorAlerts release package.
+ *
+ * See docs/release-process.md for the packaging safeguards.
  */
 component {
 
 	/**
-	 * Constructor: pathing, excludes, and clean build directories.
+	 * init
+	 *
+	 * Sets the build paths, exclusions, and empty output directories.
 	 */
 	function init(){
-		// Setup Pathing
+		// Set the build paths.
 		variables.cwd          = getCWD().reReplace( "\.$", "" );
 		variables.artifactsDir = cwd & "/.artifacts";
 		variables.buildDir     = cwd & "/.tmp";
-		// 127.0.0.1, not localhost: on Windows localhost can resolve to IPv6 ::1
-		// while CommandBox binds the IPv4 loopback, and the runner preflight then
-		// times out against a server that is actually up.
+		// Use the IPv4 address because Windows can resolve localhost to IPv6
+		// while CommandBox listens only on IPv4.
 		variables.testRunner   = "http://127.0.0.1:60310/tests/runner.cfm";
 
 		/**
-		 * Source excludes NOT added to the final package.
+		 * Lists top-level entries to exclude from the package.
 		 *
-		 * These are regex patterns run through reFindNoCase() against each
-		 * top-level entry name in copy() below. reFindNoCase does a PARTIAL
-		 * match, so anchor anything whose name is a prefix of something that
-		 * must ship. Only TOP-LEVEL entries are tested; a directory that
-		 * survives is copied whole.
-		 *
-		 * Keep shipping: box.json, ModuleConfig.cfc, README.md, changelog.md,
-		 * config/, models/, interceptors/
+		 * See docs/release-process.md before changing these expressions.
 		 */
 		variables.excludes = [
 			"^[\\/]?build$",
-			// Dependencies: CommandBox reinstalls modules/ from box.json on install.
+			// CommandBox installs modules from box.json.
 			"^[\\/]?modules$",
 			"^[\\/]?test-harness$",
 			"^[\\/]?test-results$",
 			"server-.*\.json",
 			"(AGENTS|CLAUDE|DEVNOTES)\.md",
 			"\.bak$",
-			// Nothing we ship is an archive; a stray zip once bloated a caffeinecms build 6x.
+			// Do not copy archives into the release package.
 			"\.(zip|tar|tar\.gz|tgz|7z|rar)$",
-			// Every dotfile/dotdir (.git, .env, .artifacts, .tmp, ...)
+			// Exclude every top-level hidden file and directory.
 			"^[\\/]?\..*"
 		];
 
-		// Cleanup + Init Build Directories
+		// Recreate the build output directories.
 		[
 			variables.buildDir,
 			variables.artifactsDir
@@ -57,20 +50,21 @@ component {
 			directoryCreate( item, true, true );
 		} );
 
-		// Create Mappings
+		// Map the installed ColdBox source for the build task.
 		fileSystemUtil.createMapping( "coldbox", variables.cwd & "test-harness/coldbox" );
 
 		return this;
 	}
 
 	/**
-	 * Run the build process: test, build source, checksums.
+	 * run
 	 *
-	 * @projectName The project name used for resources and slugs
-	 * @version     The version you are building
-	 * @buildID     The build identifier
-	 * @branch      The branch you are building. Empty resolves the CURRENT git
-	 *              branch at build time so the artifact metadata never lies.
+	 * Runs the tests, builds the package, and creates checksum files.
+	 *
+	 * @projectName The project name used for resources and slugs.
+	 * @version     The version to build.
+	 * @buildID     The build identifier.
+	 * @branch      The branch to build. When blank, uses the current branch.
 	 */
 	function run(
 		required projectName,
@@ -82,19 +76,17 @@ component {
 			arguments.branch = getCurrentBranch();
 		}
 
-		// Certify before packaging: a release build must never skip its tests.
-		// The preflight makes an unreachable server abort with an ACCURATE
-		// message (server down != test regression).
+		// Confirm the test server is available before running the suite.
 		ensureTestRunnerReachable();
 		runTests();
 
-		// Create project mapping
+		// Map the project for the build task.
 		fileSystemUtil.createMapping( arguments.projectName, variables.cwd );
 
-		// Build the source
+		// Build and verify the package.
 		buildSource( argumentCollection = arguments );
 
-		// checksums
+		// Create checksum files for the zip.
 		buildChecksums();
 
 		print
@@ -104,7 +96,9 @@ component {
 	}
 
 	/**
-	 * Run the test suites and abort the build on any failure.
+	 * runTests
+	 *
+	 * Runs the test suite and stops the build when a test fails.
 	 */
 	function runTests(){
 		print.blueLine( "Testing the package, please wait..." ).toConsole();
@@ -119,12 +113,14 @@ component {
 	}
 
 	/**
-	 * Build the source: copy the slim module tree, stamp versions, zip, verify.
+	 * buildSource
 	 *
-	 * @projectName The project name used for resources and slugs
-	 * @version     The version you are building
-	 * @buildID     The build identifier
-	 * @branch      The branch you are building
+	 * Copies, stamps, packages, and verifies the module source.
+	 *
+	 * @projectName The project name used for resources and slugs.
+	 * @version     The version to build.
+	 * @buildID     The build identifier.
+	 * @branch      The branch to build.
 	 */
 	function buildSource(
 		required projectName,
@@ -145,21 +141,21 @@ component {
 
 		ensureExportDir( argumentCollection = arguments );
 
-		// Project Build Dir
+		// Create the staging directory.
 		variables.projectBuildDir = variables.buildDir & "/#projectName#";
 		directoryCreate( variables.projectBuildDir, true, true );
 
-		// Copy source
+		// Copy the source into the staging directory.
 		print.blueLine( "Copying source to build folder..." ).toConsole();
 		copy( variables.cwd, variables.projectBuildDir );
 
-		// Create build ID
+		// Add the build marker file.
 		fileWrite(
 			"#variables.projectBuildDir#/#projectName#-#version#+#buildID#",
 			"Built with love on #dateTimeFormat( now(), "full" )#"
 		);
 
-		// Updating Placeholders
+		// Replace version and build placeholders.
 		print.greenLine( "Updating version identifier to #arguments.version#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
@@ -178,7 +174,7 @@ component {
 			)
 			.run();
 
-		// zip up source
+		// Create and verify the zip.
 		var destination = "#variables.exportsDir#/#projectName#-#version#.zip";
 		print.greenLine( "Zipping code to #destination#" ).toConsole();
 		cfzip(
@@ -191,16 +187,15 @@ component {
 
 		verifyZip( destination );
 
-		// Copy box.json for convenience
+		// Copy box.json next to the zip.
 		fileCopy( "#variables.projectBuildDir#/box.json", variables.exportsDir );
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
-
 	/**
-	 * Resolve the git branch by reading .git/HEAD directly (no git binary
-	 * dependency). Returns "main" when HEAD is unreadable or detached, which
-	 * only influences the version-token stamping.
+	 * getCurrentBranch
+	 *
+	 * Reads the branch from .git/HEAD without calling Git.
+	 * Returns "main" when HEAD cannot provide a branch name.
 	 */
 	private function getCurrentBranch(){
 		var headFile = variables.cwd & ".git/HEAD";
@@ -215,9 +210,10 @@ component {
 	}
 
 	/**
-	 * Abort with an accurate message when the TestBox HTTP runner is
-	 * unreachable. Probes the harness web root, NOT runner.cfm -- a bare GET of
-	 * the runner executes the whole suite and times the probe out.
+	 * ensureTestRunnerReachable
+	 *
+	 * Stops the build when the test server cannot be reached.
+	 * Checks the web root because requesting runner.cfm would run the tests.
 	 */
 	private function ensureTestRunnerReachable(){
 		var probeUrl   = reReplaceNoCase( variables.testRunner, "/tests/runner\.cfm.*$", "/" );
@@ -245,7 +241,9 @@ component {
 	}
 
 	/**
-	 * Build SHA-512 and MD5 checksums next to the zip.
+	 * buildChecksums
+	 *
+	 * Creates SHA-512 and MD5 checksum files next to the zip.
 	 */
 	private function buildChecksums(){
 		print.greenLine( "Building checksums" ).toConsole();
@@ -268,12 +266,12 @@ component {
 	}
 
 	/**
-	 * Abort the build if the zip does not contain every file staged for it.
-	 * Deliberately dumb counting: it catches ANY ignore pattern, exclude regex,
-	 * or zip quirk that eats source, which is exactly how caffeinecms
-	 * 1.0.0-beta.1 shipped broken.
+	 * verifyZip
 	 *
-	 * @zipPath Absolute path to the zip that was just written
+	 * Stops the build when the zip and staging directory have different counts.
+	 * See docs/release-process.md for why this check is required.
+	 *
+	 * @zipPath The absolute path to the new zip.
 	 */
 	private function verifyZip( required string zipPath ){
 		cfzip( action = "list", file = arguments.zipPath, name = "local.zipEntries" );
@@ -284,7 +282,7 @@ component {
 			} )
 			.len();
 
-		// cfzip lists directories as their own rows, so only count the "file" ones.
+		// Count only files because cfzip also returns directory rows.
 		var zippedCount = 0;
 		for ( var row in local.zipEntries ) {
 			if ( row.type == "file" ) {
@@ -304,11 +302,13 @@ component {
 	}
 
 	/**
-	 * DirectoryCopy with top-level excludes (directoryCopy is broken in Lucee).
+	 * copy
 	 *
-	 * @src     The source directory
-	 * @target  The target directory
-	 * @recurse Recurse into subdirectories
+	 * Copies top-level entries that do not match variables.excludes.
+	 *
+	 * @src     The source directory.
+	 * @target  The target directory.
+	 * @recurse An unused compatibility argument.
 	 */
 	private function copy( src, target, recurse = true ){
 		directoryList(
@@ -336,10 +336,12 @@ component {
 	}
 
 	/**
-	 * Ensure the export directory exists at .artifacts/NAME/VERSION/
+	 * ensureExportDir
 	 *
-	 * @projectName The project name
-	 * @version     The version being built
+	 * Creates the versioned artifact directory when needed.
+	 *
+	 * @projectName The project name.
+	 * @version     The version being built.
 	 */
 	private function ensureExportDir( required projectName, version = "1.0.0" ){
 		if ( structKeyExists( variables, "exportsDir" ) && directoryExists( variables.exportsDir ) ) {

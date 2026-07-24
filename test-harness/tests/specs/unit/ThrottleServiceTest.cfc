@@ -1,6 +1,5 @@
 /**
- * Unit tests for ThrottleService: first-N + digest window semantics, expiry,
- * flushing, the memory cap, and basic thread safety.
+ * Tests throttle limits, expiration, digests, memory limits, and locking.
  */
 component extends="tests.resources.BaseUnitSpec" {
 
@@ -52,9 +51,9 @@ component extends="tests.resources.BaseUnitSpec" {
 				settings.throttle.windowSeconds = 1;
 				service.$property( propertyName = "settings", mock = settings );
 
-				service.record( "sig-a", snapshot ); // sends, opens window
-				service.record( "sig-a", snapshot ); // suppressed
-				service.record( "sig-a", snapshot ); // suppressed
+				service.record( "sig-a", snapshot ); // Send and start the window.
+				service.record( "sig-a", snapshot ); // Suppress this occurrence.
+				service.record( "sig-a", snapshot ); // Suppress this occurrence.
 				sleep( 1100 );
 
 				var verdict = service.record( "sig-a", snapshot );
@@ -74,8 +73,8 @@ component extends="tests.resources.BaseUnitSpec" {
 				service.$property( propertyName = "settings", mock = settings );
 
 				service.record( "sig-suppressed", snapshot );
-				service.record( "sig-suppressed", snapshot ); // suppressed once
-				service.record( "sig-clean", snapshot );      // never suppressed
+				service.record( "sig-suppressed", snapshot ); // Suppress one occurrence.
+				service.record( "sig-clean", snapshot );      // Send every occurrence.
 				sleep( 1100 );
 
 				var seeds = service.flushExpired();
@@ -83,7 +82,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( seeds[ 1 ].signature ).toBe( "sig-suppressed" );
 				expect( seeds[ 1 ].suppressedCount ).toBe( 1 );
 
-				// Both windows were retired, so a second flush finds nothing.
+				// The first flush removed both expired windows.
 				expect( service.flushExpired() ).toBeEmpty();
 			} );
 
@@ -95,7 +94,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				service.record( "sig-1", snapshot );
 				service.record( "sig-2", snapshot );
 
-				// The cap is hit and nothing is expired, so sig-3 sends untracked.
+				// The full registry cannot track sig-3, so it sends without state.
 				expect( service.record( "sig-3", snapshot ).action ).toBe( "SEND" );
 				expect( service.record( "sig-3", snapshot ).action ).toBe( "SEND", "untracked signatures always send" );
 			} );
@@ -111,11 +110,10 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "does not lose counts under concurrent recording", function(){
-				/* Threads read `service`/`snapshot` from the spec's variables scope:
-				 * thread ATTRIBUTES are deep-copied on Adobe CF, which would hand
-				 * each thread its own ThrottleService copy and prove nothing.
-				 * Completion is detected via the shared `done` struct instead of
-				 * thread-join, because join inside a closure is a no-op on BoxLang. */
+				/* Read shared values from the spec variables scope. Adobe
+				 * ColdFusion deep-copies thread attributes, which would give each
+				 * thread a different service. Track completion in `done` because
+				 * BoxLang does not join a thread from inside this closure. */
 				done = {};
 				for ( var t = 1; t <= 4; t++ ) {
 					thread name="throttleSmoke#t##createUUID()#" {

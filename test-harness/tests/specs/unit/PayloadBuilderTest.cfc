@@ -1,6 +1,5 @@
 /**
- * Unit tests for PayloadBuilder: payload shape, exception extraction, rc
- * sanitization/masking, and graceful behavior with no request context.
+ * Tests payload fields, exceptions, request data, masking, and missing context.
  */
 component extends="tests.resources.BaseUnitSpec" {
 
@@ -117,8 +116,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	}
 
 	/**
-	 * Builds a controller stub answering getSetting() plus a request context
-	 * carrying the given rc.
+	 * newControllerStub
+	 *
+	 * Builds a controller stub with settings and a request collection.
 	 *
 	 * @rc The request collection the stubbed context returns.
 	 */

@@ -1,7 +1,5 @@
 /**
- * End-to-end integration: real LogBox logger calls and real onException
- * announcements flow through the appender/interceptor, the throttle, the
- * renderer, and cbmailservices' InMemory mailer.
+ * Tests alerts through LogBox, throttling, rendering, and the in-memory mailer.
  */
 component extends="tests.resources.BaseIntegrationSpec" {
 
@@ -59,9 +57,8 @@ component extends="tests.resources.BaseIntegrationSpec" {
 			} );
 
 			it( "delivers a digest after the window closes", function(){
-				// Shrink the live window so the spec does not wait 10 minutes,
-				// then restore it: the settings struct is the shared module
-				// settings instance, so leaving it dirty would leak into other specs.
+				// Shorten the shared throttle window for this test, then restore
+				// it so later tests keep the default value.
 				var settings = getInstance( "CaptureService@errorAlerts" ).getSettings();
 				var original = settings.throttle.windowSeconds;
 

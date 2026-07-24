@@ -1,30 +1,21 @@
 /**
  * errorAlerts Module Configuration
  *
- * Registers a LogBox appender on the ROOT logger at runtime, so the host app
- * never edits its logBox config. The appender catches manual `logger.error()` /
- * `logger.fatal()` calls. A companion `onException` interceptor catches
- * unhandled exceptions, because ColdBox does NOT log those through LogBox when
- * the host defines its own `exceptionHandler` setting.
- *
- * Captured events are throttled per error signature (first N send immediately,
- * the rest roll into one digest email per window) and delivered through the
- * configured notifier. EmailNotifier ships with the module; `settings.notifier`
- * accepts any WireBox ID implementing INotifier, which is the seam for swapping
- * in Sentry or another destination later.
+ * Registers the LogBox appender and unhandled-exception interceptor. Captured
+ * events pass through throttling before the configured notifier receives them.
  */
 component {
 
-	// Module Properties
+	// ColdBox reads these module properties during startup.
 	this.title              = "errorAlerts";
 	this.author             = "Angry Sam Productions, Inc.";
 	this.webURL             = "https://github.com/homestar9/errorAlerts";
 	this.description        = "Throttled error notifications (first-N + digest) for ColdBox apps.";
-	// NOT hardcoded: box.json is the single source of truth. See readPackageVersion() below.
+	// Read the version from box.json so it is defined in one place.
 	this.version            = readPackageVersion();
 	this.viewParentLookup   = false;
 	this.layoutParentLookup = false;
-	// Headless module: no handlers, views, or routes.
+	// This module has no handlers, views, or routes.
 	this.entryPoint         = "";
 	this.inheritEntryPoint  = false;
 	this.modelNamespace     = "errorAlerts";
@@ -33,60 +24,53 @@ component {
 	this.dependencies       = [ "cbmailservices" ];
 
 	/**
-	 * Declares the default module settings. Hosts override them in
-	 * config/modules/errorAlerts.cfc; the returned struct merges over these.
+	 * configure
+	 *
+	 * Defines the default module settings.
+	 * Applications can override them in config/modules/errorAlerts.cfc.
 	 */
 	function configure(){
 		variables.settings = {
-			// Master switch. false = the module loads but registers nothing.
+			// Set false to load the module without registering its services.
 			enabled              : true,
-			// Explicit allow-list of ColdBox environments the module is active in.
-			// EMPTY means every environment EXCEPT "development".
+			// An empty list allows every environment except development.
 			environments         : [],
-			// Where alert emails go. REQUIRED for the shipped EmailNotifier:
-			// when blank, the module prints one startup warning and stays inactive.
+			// EmailNotifier requires a recipient. A blank value keeps it inactive.
 			to                   : "",
-			// Sender address. Falls back to `to` when blank.
+			// A blank sender uses the recipient address.
 			from                 : "",
-			// Prepended to every subject. Blank = "[<appName>]" resolved per email.
+			// A blank prefix uses the ColdBox application name.
 			subjectPrefix        : "",
-			// Any WireBox ID implementing errorAlerts.models.notifiers.INotifier.
-			// This is the seam for swapping email out for Sentry or anything else.
+			// Set a WireBox ID that implements INotifier.
 			notifier             : "EmailNotifier@errorAlerts",
-			// "queue" hands the mail to the cbmailservices queue task, off the
-			// failing request. "send" delivers synchronously and blocks the
-			// request for one SMTP round-trip.
+			// "queue" sends later. "send" waits for email delivery.
 			deliveryMode         : "queue",
-			// Severity range the appender listens to. FATAL..ERROR by default;
-			// set levelMax to "WARN" to receive warning emails too.
+			// Set the LogBox severity range that produces alerts.
 			levelMin             : "FATAL",
 			levelMax             : "ERROR",
-			// First N + digest throttling, per error signature. The window is
-			// fixed and anchored at the signature's first occurrence.
+			// Limit immediate alerts for each signature during a fixed window.
 			throttle             : {
 				maxPerWindow         : 3,
 				windowSeconds        : 600,
 				maxTrackedSignatures : 500
 			},
-			// How often the scheduled task sweeps expired windows for digests.
+			// Check expired throttle windows at this interval.
 			digestFlushSeconds   : 60,
-			// Category PREFIXES that never alert.
-			// - "cbmailservices": a failed alert email must not alert about itself.
-			// - "coldbox.system.Bootstrap": unhandled exceptions arrive via this
-			//   module's onException interceptor instead. Without this ignore, a
-			//   host with NO custom exceptionHandler would get every crash twice.
+			// Ignore category prefixes that would create duplicate or recursive
+			// alerts. Removing cbmailservices can alert on a failed alert email.
+			// Removing coldbox.system.Bootstrap can report one exception twice.
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
-			// Exception `type` values that never alert.
+			// Ignore exceptions with one of these exact type values.
 			ignoreExceptionTypes : [],
-			// Collapse digit runs and UUIDs before hashing, so "Order 123 failed"
-			// and "Order 456 failed" throttle as one signature.
+			// Replace numbers and UUIDs before creating a signature.
 			normalizeSignatures  : true,
-			// Email shaping.
+			// Limit the content included in each email.
 			maxBodyBytes         : 102400,
 			rcValueMaxLength     : 200,
 			stackFrames          : 10,
 			includeScopes        : { rc : true, cgi : true, extraInfo : true },
-			// rc keys whose values render as "*** masked ***" (substring match).
+			// Mask an rc value when its key contains one of these strings,
+			// ignoring case. Removing a term can expose matching values in email.
 			maskKeys             : [
 				"password",
 				"passwd",
@@ -102,10 +86,10 @@ component {
 	}
 
 	/**
-	 * Registers the appender on the root logger plus the unhandled-exception
-	 * interceptor, but only when the module is active (see isActive()).
-	 * LogBox's registerAppender() is idempotent, so a fwreinit cannot
-	 * double-register the appender.
+	 * onLoad
+	 *
+	 * Registers the appender and interceptor when the module is active.
+	 * LogBox ignores a second appender registration with the same name.
 	 */
 	function onLoad(){
 		var moduleSettings = controller.getSetting( "moduleSettings" ).errorAlerts;
@@ -123,11 +107,8 @@ component {
 		);
 		logBox.getRootLogger().addAppender( logBox.getAppenderRegistry()[ "errorAlerts" ] );
 
-		/* When a host configures its own `exceptionHandler`, ColdBox's Bootstrap
-		 * only announces the `onException` interception point and never logs the
-		 * exception through LogBox (see Bootstrap.processException). The appender
-		 * alone would therefore miss unhandled exceptions, so this interceptor
-		 * feeds them into the same capture pipeline. */
+		/* A custom ColdBox exceptionHandler prevents Bootstrap from logging the
+		 * exception, so the appender cannot capture that exception on its own. */
 		controller.getInterceptorService().registerInterceptor(
 			interceptorClass = "errorAlerts.interceptors.UnhandledExceptionCapture",
 			interceptorName  = "UnhandledExceptionCapture@errorAlerts"
@@ -135,8 +116,10 @@ component {
 	}
 
 	/**
-	 * Removes the appender and interceptor so a module unload/reinit starts
-	 * clean. Failures are swallowed: unload hygiene must never break a shutdown.
+	 * onUnload
+	 *
+	 * Removes the appender and interceptor during module shutdown.
+	 * Cleanup failures do not stop the shutdown.
 	 */
 	function onUnload(){
 		try {
@@ -150,11 +133,10 @@ component {
 	}
 
 	/**
-	 * Decides whether the module should register anything.
-	 * Active when: `enabled` is true, the current environment is allowed
-	 * (empty allow-list = everything except "development"), and, when the
-	 * shipped EmailNotifier is in use, `to` is not blank. A blank `to` prints
-	 * ONE startup warning so the misconfiguration is loud but harmless.
+	 * isActive
+	 *
+	 * Checks whether the settings allow the module to register.
+	 * EmailNotifier also requires a recipient address.
 	 *
 	 * @settings    The merged module settings struct.
 	 * @environment The current ColdBox environment name.
@@ -186,9 +168,10 @@ component {
 	}
 
 	/**
-	 * Maps a level name ("FATAL", "ERROR", "WARN"...) to its LogBox number.
-	 * Throws on an unknown name so a settings typo fails loudly at startup
-	 * instead of silently registering the wrong level range.
+	 * toLevel
+	 *
+	 * Returns the LogBox number for a level name.
+	 * Throws when the name is invalid so startup cannot use the wrong range.
 	 *
 	 * @name The level name from settings.
 	 */
@@ -204,10 +187,11 @@ component {
 	}
 
 	/**
-	 * Reads this module's version out of box.json, the single source of truth.
-	 * Called from the pseudo-constructor because ColdBox harvests this.version
-	 * BEFORE configure() runs. Fails soft: a missing or malformed box.json must
-	 * never stop the module from registering.
+	 * readPackageVersion
+	 *
+	 * Reads the module version from box.json.
+	 * This must run before configure() because ColdBox reads this.version first.
+	 * Returns an empty string when box.json cannot be read.
 	 */
 	private string function readPackageVersion(){
 		try {

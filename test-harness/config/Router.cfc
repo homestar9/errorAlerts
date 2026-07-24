@@ -1,10 +1,12 @@
 /**
- * Harness router: conventions only.
+ * Configures routes for the test harness.
  */
 component {
 
 	/**
-	 * Configures the default convention route.
+	 * configure
+	 *
+	 * Adds the default handler and optional action route.
 	 */
 	function configure(){
 		setFullRewrites( true );

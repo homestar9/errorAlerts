@@ -1,6 +1,5 @@
 /**
- * Unit tests for CaptureService: ignore lists, verdict handling, digest
- * dispatch, the notifier seam, and the never-throw rule.
+ * Tests CaptureService filtering, throttling results, digests, and failures.
  */
 component extends="tests.resources.BaseUnitSpec" {
 

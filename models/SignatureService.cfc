@@ -1,20 +1,18 @@
 /**
  * SignatureService
  *
- * Computes a stable fingerprint for a log event so the throttle can recognize
- * "the same error happening again". Pure logic, no side effects.
+ * Creates a repeatable signature that groups matching log events.
  */
 component singleton accessors="true" {
 
-	// Injected properties
+	// WireBox injects the module settings.
 	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
 
 	/**
-	 * Computes the signature: an MD5 hash of the category, the normalized first
-	 * 200 characters of the message, and the top stack frame (when the event
-	 * carries an exception). MD5 is plenty here; collisions only risk merging
-	 * two errors into one throttle bucket, and it hashes identically on Adobe
-	 * CF and BoxLang.
+	 * compute
+	 *
+	 * Hashes the category, first 200 message characters, and top stack frame.
+	 * A hash collision would group two errors in the same throttle window.
 	 *
 	 * @logEvent The LogBox LogEvent to fingerprint.
 	 */
@@ -28,16 +26,16 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Returns "template:line" for the first tagContext frame when extraInfo is
-	 * an exception (a cfcatch struct carries tagContext), else "". Including
-	 * the throw site keeps two different errors with the same message text in
-	 * separate throttle buckets.
+	 * topFrame
+	 *
+	 * Returns "template:line" for the first exception frame.
+	 * Returns an empty string when the event has no exception frame.
 	 *
 	 * @extraInfo The log event's extraInfo value, any type.
 	 */
 	private string function topFrame( required any extraInfo ){
-		// cfcatch objects are struct-like but not true structs on Adobe CF,
-		// so this mirrors LogEvent.getExtraInfoAsString()'s detection style.
+		// Adobe ColdFusion cfcatch values can be objects instead of structs.
+		// Check for either form before reading tagContext.
 		if (
 			( isObject( arguments.extraInfo ) || isStruct( arguments.extraInfo ) )
 			&& structKeyExists( arguments.extraInfo, "tagContext" )
@@ -53,9 +51,9 @@ component singleton accessors="true" {
 	}
 
 	/**
-	 * Collapses digit runs to "{n}" and UUIDs to "{uuid}" (when
-	 * settings.normalizeSignatures is on) so messages that differ only by ids,
-	 * like "Order 123 failed" vs "Order 456 failed", produce one signature.
+	 * normalize
+	 *
+	 * Replaces UUIDs and digit runs when signature normalization is enabled.
 	 *
 	 * @message The message fragment to normalize.
 	 */
@@ -64,7 +62,7 @@ component singleton accessors="true" {
 			return arguments.message;
 		}
 
-		// Standard UUIDs (8-4-4-4-12), then CFML createUUID() format (8-4-4-16).
+		// Replace standard UUIDs before the shorter CFML createUUID() form.
 		var result = arguments.message.reReplaceNoCase(
 			"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
 			"{uuid}",

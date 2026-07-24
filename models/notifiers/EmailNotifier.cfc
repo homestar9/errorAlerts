@@ -1,21 +1,20 @@
 /**
  * EmailNotifier
  *
- * The shipped INotifier: renders the payload with EmailRenderer and delivers it
- * through cbmailservices. With deliveryMode "queue" (the default) the SMTP
- * round-trip happens on the cbmailservices queue task, off the failing request;
- * "send" delivers synchronously.
+ * Renders notification payloads and delivers them through cbmailservices.
+ * Queue mode sends later, while send mode waits for delivery.
  */
 component singleton accessors="true" implements="errorAlerts.models.notifiers.INotifier" {
 
-	// Injected properties. The provider keeps load order flexible: cbmailservices
-	// is only resolved the first time an alert actually sends.
+	// The provider loads cbmailservices when the first alert is sent.
 	property name="settings"    inject="coldbox:moduleSettings:errorAlerts";
 	property name="renderer"    inject="EmailRenderer@errorAlerts";
 	property name="mailService" inject="provider:MailService@cbmailservices";
 
 	/**
-	 * Constructor. Grabs the System handle used for stderr failure notes.
+	 * init
+	 *
+	 * Stores the Java System object used to write failures to System.err.
 	 */
 	function init(){
 		variables.system = createObject( "java", "java.lang.System" );
@@ -23,9 +22,11 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	}
 
 	/**
-	 * Builds and delivers one alert or digest email. The whole body is wrapped
-	 * in try/catch: mail failures go to System.err only, never into the request
-	 * and never through LogBox (see INotifier).
+	 * sendNotification
+	 *
+	 * Builds and delivers one alert or digest email.
+	 * Mail failures go to System.err so they cannot break the request or create
+	 * another LogBox error.
 	 *
 	 * @payload The payload struct from PayloadBuilder.
 	 */
@@ -52,10 +53,12 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	}
 
 	/**
-	 * Builds the subject line:
+	 * buildSubject
+	 *
+	 * Builds an error subject in this form:
 	 *   "[prefix] [environment] SEVERITY: first 80 chars of the message"
-	 * Digests use "DIGEST:" plus the suppressed count. The prefix falls back to
-	 * "[appName]" when settings.subjectPrefix is blank.
+	 * Digest subjects include the suppressed count. A blank prefix uses the
+	 * application name.
 	 *
 	 * @payload The payload struct being delivered.
 	 */

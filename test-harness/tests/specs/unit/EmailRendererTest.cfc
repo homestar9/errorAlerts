@@ -1,6 +1,5 @@
 /**
- * Unit tests for EmailRenderer: Gmail-safe output (no style blocks, classes,
- * or scripts), HTML escaping, the size cap, and the digest variant.
+ * Tests inline HTML, escaping, length limits, and digest rendering.
  */
 component extends="tests.resources.BaseUnitSpec" {
 
@@ -31,14 +30,14 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "renders the exception stack frames", function(){
-				// encodeForHtml() turns "/" into &##x2f; so assert on the bare name.
+				// Assert only the file name because encodeForHtml() escapes "/".
 				var html = renderer.renderError( newErrorPayload() );
 				expect( html ).toInclude( "OrderService.cfc" );
 				expect( html ).toInclude( "HarnessBoom" );
 			} );
 
 			it( "renders rc and request key/value tables", function(){
-				// encodeForHtml() turns "*" into &##x2a; so assert on the bare word.
+				// Assert only the word because encodeForHtml() escapes "*".
 				var html = renderer.renderError( newErrorPayload() );
 				expect( html ).toInclude( "orders.save" );
 				expect( html ).toInclude( "masked" );
@@ -84,7 +83,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	}
 
 	/**
-	 * Builds a representative error payload for rendering.
+	 * newErrorPayload
+	 *
+	 * Builds an error payload with every rendered section.
 	 */
 	private struct function newErrorPayload(){
 		return {

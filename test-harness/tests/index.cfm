@@ -1,7 +1,7 @@
 <cfsetting showdebugoutput="false" >
-<!--- CPU Integration --->
+<!--- Keep test links in this window when cpu is true. --->
 <cfparam name="url.cpu" default="false">
-<!--- SETUP THE ROOTS OF THE BROWSER RIGHT HERE --->
+<!--- Set the directory displayed by the test browser. --->
 <cfset rootMapping 	= "/tests/specs">
 <cfif directoryExists( rootMapping )>
 	<cfset rootPath = rootMapping>
@@ -9,21 +9,21 @@
 	<cfset rootPath = expandPath( rootMapping )>
 </cfif>
 
-<!--- param incoming --->
+<!--- Read the requested directory. --->
 <cfparam name="url.path" default="/">
 
-<!--- Decodes & Path Defaults --->
+<!--- Use the root when no directory was requested. --->
 <cfif !len( url.path )>
 	<cfset url.path = "/">
 </cfif>
-<!--- Don't allow the directory to be traversed higher than the root --->
+<!--- Remove parent-directory segments so browsing stays under the test root. --->
 <cfset url.path = replaceNoCase( url.path, '../', '', 'all' )>
 <cfset url.path = replaceNoCase( url.path, '..\', '', 'all' )>
 
-<!--- Prepare TestBox --->
+<!--- Create the TestBox runner. --->
 <cfset testbox = new testbox.system.TestBox()>
 
-<!--- Run Tests Action?--->
+<!--- Run all tests under the requested directory. --->
 <cfif structKeyExists( url, "action")>
 	<cfif directoryExists( expandPath( rootMapping & url.path ) )>
 		<cfoutput>#testbox.init( directory=rootMapping & url.path ).run()#</cfoutput>
@@ -34,18 +34,18 @@
 
 </cfif>
 
-<!--- Get list of files --->
+<!--- List the requested directory. --->
 <cfdirectory action="list" directory="#rootPath & url.path#" name="qResults" sort="directory asc, name asc">
-<!--- Get the execute path --->
+<!--- Build the path used to run a selected test. --->
 <cfset executePath = rootMapping & ( url.path eq "/" ? "/" : url.path & "/" )>
-<!--- Get the Back Path --->
+<!--- Build the link to the parent directory. --->
 <cfif url.path neq "/">
 	<cfset backPath = replacenocase( url.path, listLast( url.path, "/" ), "" )>
 	<cfset backPath = reReplace( backpath, "/$", "" )>
 </cfif>
 
 <cfset ASSETS_DIR = expandPath( "/testbox/system/reports/assets" )>
-<!--- Do HTML --->
+<!--- Render the test browser. --->
 <!DOCTYPE html>
 <html>
 <head>
@@ -65,7 +65,7 @@
 <cfoutput>
 <body>
 
-<!--- Title --->
+<!--- Render the browser heading and test list. --->
 <div id="tb-runner" class="container">
 	<div class="row">
 		<div class="col-md-4 text-center mx-auto">

@@ -1,1 +1,1 @@
-<!--- ColdBox front controller: all requests route through Application.cfc. --->
+<!--- Application.cfc passes this request to ColdBox. --->

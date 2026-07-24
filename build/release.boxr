@@ -1,31 +1,19 @@
-# Release recipe: build the module (test-gated), then publish the BUILT tree.
+# Build, verify, and publish the staged module.
 # Run with: box run-script release
-#
-# Requires the test server running on port 60310 (box run-script start:2023).
-# The build aborts on any test failure, so a broken suite can never ship.
-#
-# ALWAYS release with `box run-script release`. Never run a bare `box publish`
-# from the repo root: CommandBox reads .gitignore when it packages, so any
-# unanchored ignore pattern silently strips matching source folders from the
-# published module. That is how caffeinecms 1.0.0-beta.1 shipped with missing
-# models and every app that installed it died at startup. buildSource() counts
-# the zip contents and aborts on a mismatch, so this path is the guarded one.
+# Start the test server on port 60310 before running this recipe.
+# See docs/release-process.md for the packaging safeguards.
 
-# Fail fast if local main is not what the remote has.
+# Update local main from the remote repository.
 !git checkout -f main
 !git pull origin main
 
-# Build: runs the FULL test suite first and aborts on any failure, then writes
-# the slim module tree to .tmp/erroralerts/ and the distributable zip to
-# .artifacts/erroralerts/<version>/.
+# Run all tests and build the staged module and zip.
 run-script build:module
 
-# Publish from the built tree, not the repo root, so ForgeBox receives exactly
-# what the build produced (no reliance on box.json's ignore list).
+# Publish the verified files from the staging directory.
 cd .tmp/erroralerts
 publish
 cd ../../
 
-# After a successful publish, tag the release by hand so the published
-# artifact stays findable in git history:
+# Tag the published version manually:
 #   git tag v<version> && git push origin main --tags

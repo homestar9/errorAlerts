@@ -1,7 +1,5 @@
 /**
- * Integration tests for module wiring: the appender lands on the root logger,
- * the interceptor and scheduler register, and the isActive() gating logic
- * makes the right call for every configuration shape.
+ * Tests appender, interceptor, scheduler, and activation registration.
  */
 component extends="tests.resources.BaseIntegrationSpec" {
 

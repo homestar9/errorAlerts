@@ -1,36 +1,39 @@
 /**
- * Harness main handler: a home action, a manual smoke-test action that throws,
- * and the custom exception handler the harness config points at.
+ * Provides status and manual test actions for the harness.
  */
 component {
 
 	/**
-	 * Confirms the harness is up.
+	 * index
+	 *
+	 * Returns a message that confirms the harness is running.
 	 */
 	function index( event, rc, prc ){
 		return "errorAlerts harness up";
 	}
 
 	/**
-	 * Throws on purpose so a human (or a browser-driven test) can watch the
-	 * whole pipeline fire: hit /main/boom five times fast and expect three
-	 * alert emails plus one digest after the window closes.
+	 * boom
+	 *
+	 * Throws an exception for a manual alert test.
 	 */
 	function boom( event, rc, prc ){
 		throw( type = "HarnessBoom", message = "errorAlerts harness test explosion" );
 	}
 
 	/**
-	 * The custom exceptionHandler. Deliberately does nothing beyond the status
-	 * code -- proving the module needs no host cooperation to capture the error.
+	 * onException
+	 *
+	 * Sets the response status for the harness's custom exception handler.
 	 */
 	function onException( event, rc, prc ){
 		event.setHTTPHeader( statusCode = 500 );
 	}
 
 	/**
-	 * Reports whether the module's pieces resolved and whether a logged error
-	 * lands in the InMemory mailbox. For manual smoke testing only.
+	 * diag
+	 *
+	 * Checks module services and sends an error to the in-memory mailbox.
 	 */
 	function diag( event, rc, prc ){
 		var out = [];
@@ -64,8 +67,9 @@ component {
 	}
 
 	/**
-	 * Returns the raw HTML body of the newest InMemory mail, so a human can
-	 * eyeball the rendered email. For manual smoke testing only.
+	 * lastMail
+	 *
+	 * Renders the HTML body of the newest in-memory email.
 	 */
 	function lastMail( event, rc, prc ){
 		var mailbox = getInstance( "MailService@cbmailservices" ).getMailer( "default" ).transit.getMail();

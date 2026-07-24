@@ -1,6 +1,5 @@
 /**
- * Unit tests for EmailNotifier: mail construction, subject building,
- * queue-vs-send routing, and the swallow-all-failures rule.
+ * Tests email creation, subjects, delivery modes, and failure handling.
  */
 component extends="tests.resources.BaseUnitSpec" {
 
@@ -92,7 +91,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	}
 
 	/**
-	 * A minimal error payload for subject/body assertions.
+	 * newErrorPayload
+	 *
+	 * Builds a small error payload for email tests.
 	 */
 	private struct function newErrorPayload(){
 		return {
@@ -116,7 +117,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	}
 
 	/**
-	 * A minimal digest payload for subject/body assertions.
+	 * newDigestPayload
+	 *
+	 * Builds a small digest payload for email tests.
 	 */
 	private struct function newDigestPayload(){
 		return {
