@@ -1,9 +1,20 @@
 # Anchor directory patterns with a leading "/". CommandBox reads this file
 # when packaging the repository. See docs/release-process.md.
+
+# General Ignores + IDE
+.DS_Store
+settings.xml
+WEB-INF
+/.vscode/
+\.idea/
+Thumbs.db
+.engine/**
 /.engine/
 /.artifacts/
 /.tmp/
 /modules/
+
+# Test Harness
 /test-results/
 /test-harness/coldbox/
 /test-harness/testbox/
