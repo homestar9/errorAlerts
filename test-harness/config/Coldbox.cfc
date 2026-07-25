@@ -51,8 +51,6 @@ component {
 				to            : "alerts@example.com",
 				from          : "harness@example.com",
 				subjectPrefix : "[Harness]",
-				// Allow the development environment used by the test server.
-				environments  : [ "development" ],
 				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send"
 			}

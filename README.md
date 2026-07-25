@@ -47,7 +47,7 @@ Replace the example addresses with real addresses that your mail server is allow
 
 Important defaults:
 
-- Alerts are disabled in the `development` environment unless you explicitly enable them.
+- Alerts are active in every environment, including `development`.
 - The built-in email notifier stays inactive when `to` is blank.
 - Only `ERROR` and `FATAL` messages produce alerts.
 - Email is queued by default, so it may not appear immediately.
@@ -67,7 +67,7 @@ function testError( event, rc, prc ){
 }
 ```
 
-Visit the action in your browser. In a non-development environment, you should receive an email containing the error message, exception details, route, stack frames, and a sanitized copy of the request collection.
+Visit the action in your browser. You should receive an email containing the error message, exception details, route, stack frames, and a sanitized copy of the request collection.
 
 Remove the test action after confirming delivery.
 
@@ -124,17 +124,35 @@ Throttle counters are stored in memory and are separate for each application ser
 
 ## Common configuration recipes
 
-All examples in this section go inside the struct returned by `config/modules/errorAlerts.cfc`.
+Most examples in this section go inside the struct returned by `config/modules/errorAlerts.cfc`. A few show that whole file instead, because they add a function next to `configure()`.
 
-### Enable alerts during development
+### Disable alerts in development
 
-Setting `environments` creates an explicit allow-list:
+Alerts are active in every environment. To turn them off in one environment, add a function named after that environment to `config/modules/errorAlerts.cfc`. ColdBox calls it with the merged settings struct after `configure()` returns, so your changes apply only in that environment:
 
 ```cfc
-environments : [ "development", "staging", "production" ]
+component {
+
+    function configure(){
+        return {
+            to   : "alerts@example.com",
+            from : "errors@example.com"
+        };
+    }
+
+    // ColdBox runs this only when the detected environment is `development`.
+    function development( settings ){
+        settings.enabled = false;
+    }
+
+}
 ```
 
-Use this while testing, but avoid sending repeated development errors to a shared production inbox.
+The function name must match the environment name that ColdBox detects. Add a `staging( settings )` function the same way to change settings there.
+
+Change `settings` in place. The function's return value is ignored, so `return { enabled : false }` has no effect.
+
+If you prefer to keep all environment overrides in one file, a `development()` function in `config/Coldbox.cfc` that sets `moduleSettings.errorAlerts.enabled = false` works too.
 
 ### Include WARN messages
 
@@ -181,17 +199,16 @@ Category matching is case-insensitive and checks the beginning of the category. 
 
 ### Write test emails to files
 
-For local testing without SMTP, first enable the development environment in `config/modules/errorAlerts.cfc` and use synchronous delivery:
+For local testing without SMTP, use synchronous delivery in `config/modules/errorAlerts.cfc`:
 
 ```cfc
 component {
 
     function configure(){
         return {
-            to            : "developer@example.com",
-            from          : "errors@example.com",
-            environments  : [ "development" ],
-            deliveryMode  : "send"
+            to           : "developer@example.com",
+            from         : "errors@example.com",
+            deliveryMode : "send"
         };
     }
 
@@ -229,7 +246,6 @@ Trigger a test error, then open the generated HTML file in the application's `ma
 | Setting | Default | Description |
 |---|---|---|
 | `enabled` | `true` | Master switch for all alerts. |
-| `environments` | `[]` | Allowed ColdBox environments. Empty means every environment except `development`. |
 | `to` | `""` | Alert recipient. Required by the built-in email notifier. |
 | `from` | `""` | Sender address. Uses `to` when blank. |
 | `subjectPrefix` | `""` | Text added to subjects. Uses the ColdBox application name when blank. |
@@ -265,8 +281,8 @@ The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `api
 
 Check these items in order:
 
-1. Confirm the current ColdBox environment. Development is excluded by default.
-2. Confirm that `to` is not blank and `enabled` is still `true`.
+1. Confirm that `to` is not blank and `enabled` is still `true`.
+2. Check `config/modules/errorAlerts.cfc` and `config/Coldbox.cfc` for an environment function that turns `enabled` off for the current environment.
 3. Trigger an unhandled exception or log at `ERROR` or `FATAL`. `WARN` and lower levels are ignored by default.
 4. Reinitialize ColdBox so the module reloads your settings.
 5. Confirm that your engine can send a normal email through its configured SMTP server.

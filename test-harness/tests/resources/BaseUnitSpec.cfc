@@ -26,7 +26,6 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	struct function defaultSettings(){
 		return {
 			enabled              : true,
-			environments         : [ "development" ],
 			to                   : "alerts@example.com",
 			from                 : "harness@example.com",
 			subjectPrefix        : "[Harness]",

@@ -35,40 +35,30 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				moduleConfig = prepareMock( new errorAlerts.ModuleConfig() );
 				makePublic( moduleConfig, "isActive" );
 				settings = {
-					enabled      : true,
-					environments : [],
-					to           : "dave@example.com",
-					notifier     : "EmailNotifier@errorAlerts"
+					enabled  : true,
+					to       : "dave@example.com",
+					notifier : "EmailNotifier@errorAlerts"
 				};
+			} );
+
+			it( "is active when enabled and `to` is set", function(){
+				expect( moduleConfig.isActive( settings ) ).toBeTrue();
 			} );
 
 			it( "is inactive when disabled", function(){
 				settings.enabled = false;
-				expect( moduleConfig.isActive( settings, "production" ) ).toBeFalse();
-			} );
-
-			it( "skips development by default but runs everywhere else", function(){
-				expect( moduleConfig.isActive( settings, "development" ) ).toBeFalse();
-				expect( moduleConfig.isActive( settings, "production" ) ).toBeTrue();
-				expect( moduleConfig.isActive( settings, "staging" ) ).toBeTrue();
-			} );
-
-			it( "honors an explicit environments allow-list", function(){
-				settings.environments = [ "staging" ];
-				expect( moduleConfig.isActive( settings, "staging" ) ).toBeTrue();
-				expect( moduleConfig.isActive( settings, "production" ) ).toBeFalse();
-				expect( moduleConfig.isActive( settings, "development" ) ).toBeFalse();
+				expect( moduleConfig.isActive( settings ) ).toBeFalse();
 			} );
 
 			it( "is inactive with the shipped EmailNotifier and a blank `to`", function(){
 				settings.to = "";
-				expect( moduleConfig.isActive( settings, "production" ) ).toBeFalse();
+				expect( moduleConfig.isActive( settings ) ).toBeFalse();
 			} );
 
 			it( "allows a blank `to` when a custom notifier is configured", function(){
 				settings.to       = "";
 				settings.notifier = "SentryNotifier@myModule";
-				expect( moduleConfig.isActive( settings, "production" ) ).toBeTrue();
+				expect( moduleConfig.isActive( settings ) ).toBeTrue();
 			} );
 		} );
 	}

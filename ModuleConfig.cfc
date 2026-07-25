@@ -33,8 +33,6 @@ component {
 		variables.settings = {
 			// Set false to load the module without registering its services.
 			enabled              : true,
-			// An empty list allows every environment except development.
-			environments         : [],
 			// EmailNotifier requires a recipient. A blank value keeps it inactive.
 			to                   : "",
 			// A blank sender uses the recipient address.
@@ -94,7 +92,7 @@ component {
 	function onLoad(){
 		var moduleSettings = controller.getSetting( "moduleSettings" ).errorAlerts;
 
-		if ( !isActive( moduleSettings, controller.getSetting( "environment" ) ) ) {
+		if ( !isActive( moduleSettings ) ) {
 			return;
 		}
 
@@ -138,19 +136,10 @@ component {
 	 * Checks whether the settings allow the module to register.
 	 * EmailNotifier also requires a recipient address.
 	 *
-	 * @settings    The merged module settings struct.
-	 * @environment The current ColdBox environment name.
+	 * @settings The merged module settings struct.
 	 */
-	private boolean function isActive( required struct settings, required string environment ){
+	private boolean function isActive( required struct settings ){
 		if ( !arguments.settings.enabled ) {
-			return false;
-		}
-
-		var environmentAllowed = arguments.settings.environments.len()
-		 ? arguments.settings.environments.findNoCase( arguments.environment ) > 0
-		 : arguments.environment != "development";
-
-		if ( !environmentAllowed ) {
 			return false;
 		}
 
