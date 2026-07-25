@@ -48,7 +48,16 @@
         "logs:2023":"server log serverConfigFile=server-adobe@2023.json --follow",
         "start:boxlang":"server start serverConfigFile=server-boxlang-cfml@1.json",
         "stop:boxlang":"server stop serverConfigFile=server-boxlang-cfml@1.json",
-        "logs:boxlang":"server log serverConfigFile=server-boxlang-cfml@1.json --follow"
+        "logs:boxlang":"server log serverConfigFile=server-boxlang-cfml@1.json --follow",
+        "start:lucee5":"server start serverConfigFile=server-lucee@5.json",
+        "stop:lucee5":"server stop serverConfigFile=server-lucee@5.json",
+        "logs:lucee5":"server log serverConfigFile=server-lucee@5.json --follow",
+        "start:lucee6":"server start serverConfigFile=server-lucee@6.json",
+        "stop:lucee6":"server stop serverConfigFile=server-lucee@6.json",
+        "logs:lucee6":"server log serverConfigFile=server-lucee@6.json --follow",
+        "start:2025":"server start serverConfigFile=server-adobe@2025.json",
+        "stop:2025":"server stop serverConfigFile=server-adobe@2025.json",
+        "logs:2025":"server log serverConfigFile=server-adobe@2025.json --follow"
     },
     "testbox":{
         "runner":"http://127.0.0.1:60310/tests/runner.cfm"
