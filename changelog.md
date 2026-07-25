@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-24
+
+### Removed
+
+- The `environments` setting. Alerts now run in every environment, including
+  `development`. To turn them off in one environment, add a function named after that
+  environment to `config/modules/errorAlerts.cfc` and set `settings.enabled = false`.
+  See "Disable alerts in development" in the README.
+
 ## [1.0.0] - 2026-07-24
 
 ### Added

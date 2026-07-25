@@ -31,7 +31,7 @@ component {
 			"^[\\/]?test-harness$",
 			"^[\\/]?test-results$",
 			"server-.*\.json",
-			"(AGENTS|CLAUDE|DEVNOTES)\.md",
+			"(AGENTS|CLAUDE|DEVNOTES|RELEASE)\.md",
 			"\.bak$",
 			// Do not copy archives into the release package.
 			"\.(zip|tar|tar\.gz|tgz|7z|rar)$",
@@ -63,17 +63,20 @@ component {
 	 *
 	 * @projectName The project name used for resources and slugs.
 	 * @version     The version to build.
-	 * @buildID     The build identifier.
+	 * @buildID     The build identifier. When blank, uses the short git commit SHA.
 	 * @branch      The branch to build. When blank, uses the current branch.
 	 */
 	function run(
 		required projectName,
 		version = "1.0.0",
-		buildID = createUUID(),
+		buildID = "",
 		branch  = ""
 	){
 		if ( !len( trim( arguments.branch ) ) ) {
 			arguments.branch = getCurrentBranch();
+		}
+		if ( !len( trim( arguments.buildID ) ) ) {
+			arguments.buildID = getCurrentCommit();
 		}
 
 		// Confirm the test server is available before running the suite.
@@ -119,17 +122,20 @@ component {
 	 *
 	 * @projectName The project name used for resources and slugs.
 	 * @version     The version to build.
-	 * @buildID     The build identifier.
+	 * @buildID     The build identifier. When blank, uses the short git commit SHA.
 	 * @branch      The branch to build.
 	 */
 	function buildSource(
 		required projectName,
 		version = "1.0.0",
-		buildID = createUUID(),
+		buildID = "",
 		branch  = ""
 	){
 		if ( !len( trim( arguments.branch ) ) ) {
 			arguments.branch = getCurrentBranch();
+		}
+		if ( !len( trim( arguments.buildID ) ) ) {
+			arguments.buildID = getCurrentCommit();
 		}
 
 		print
@@ -149,10 +155,11 @@ component {
 		print.blueLine( "Copying source to build folder..." ).toConsole();
 		copy( variables.cwd, variables.projectBuildDir );
 
-		// Add the build marker file.
+		// Add the build marker file. The name ends in +<short git commit SHA>, so the file the
+		// module ships with tells you exactly which commit produced it.
 		fileWrite(
 			"#variables.projectBuildDir#/#projectName#-#version#+#buildID#",
-			"Built with love on #dateTimeFormat( now(), "full" )#"
+			"Built from commit #buildID# on #dateTimeFormat( now(), "full" )#"
 		);
 
 		// Replace version and build placeholders.
@@ -207,6 +214,50 @@ component {
 			return replace( head, "ref: refs/heads/", "" );
 		}
 		return "main";
+	}
+
+	/**
+	 * getCurrentCommit
+	 *
+	 * Reads the short (7-character) commit SHA that HEAD points at, straight from the .git
+	 * folder so no Git binary is needed and it still works from an extracted copy. Returns
+	 * "nocommit" when the SHA cannot be found (no .git, or a ref this simple reader cannot
+	 * resolve). Used as the build identifier when none is passed in.
+	 */
+	private function getCurrentCommit(){
+		var headFile = variables.cwd & ".git/HEAD";
+		if ( !fileExists( headFile ) ) {
+			return "nocommit";
+		}
+		var head = trim( fileRead( headFile ) );
+		var sha  = "";
+
+		if ( left( head, 5 ) == "ref: " ) {
+			// Normal checkout: HEAD names a ref (e.g. "ref: refs/heads/main"). The SHA lives in
+			// .git/<ref>, or in .git/packed-refs once git has packed it.
+			var ref     = trim( mid( head, 6, len( head ) ) );
+			var refFile = variables.cwd & ".git/" & ref;
+			if ( fileExists( refFile ) ) {
+				sha = trim( fileRead( refFile ) );
+			} else {
+				var packedFile = variables.cwd & ".git/packed-refs";
+				if ( fileExists( packedFile ) ) {
+					for ( var rawLine in listToArray( fileRead( packedFile ), chr( 10 ) ) ) {
+						var line = trim( rawLine );
+						// A packed line is "<sha> <ref>"; skip comments (#) and peeled tags (^).
+						if ( len( line ) && left( line, 1 ) != "##" && left( line, 1 ) != "^" && right( line, len( ref ) ) == ref ) {
+							sha = listFirst( line, " " );
+							break;
+						}
+					}
+				}
+			}
+		} else {
+			// Detached HEAD: the file already holds the raw SHA.
+			sha = head;
+		}
+
+		return len( sha ) ? left( sha, 7 ) : "nocommit";
 	}
 
 	/**
