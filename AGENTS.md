@@ -56,6 +56,6 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - Avoid em-dashes in prose unless they genuinely aid clarity.
 - Do not run `cfformat` on the repo. 
 
-## Communication style
+## Communication
 
-Write comments, plans, and explanations for a beginner developer. Prefer clear, plain language over dense jargon. Briefly explain non-obvious framework behavior, conventions, or architectural decisions. Keep explanations practical, concise, and easy to scan. Challenge me if you think I am going down the wrong path, introducing unnecessary complexity, or making a decision that will make future maintenance harder. Let me know if I am introducing code-smells, and suggest a better approach. If something I say is unclear, ask me questions until you have a solid understanding.
+**Write ALL comments, plans, and explanations for a beginner developer**. Prefer clear, plain language over dense jargon. Briefly explain non-obvious framework behavior, conventions, or architectural decisions. Keep explanations practical, concise, and easy to scan. Challenge me if you think I am going down the wrong path, introducing unnecessary complexity, or making a decision that will make future maintenance harder. Let me know if I am introducing code-smells, and suggest a better approach. If something I say is unclear, ask me questions until you have a solid understanding.
