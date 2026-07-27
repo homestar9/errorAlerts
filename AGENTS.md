@@ -18,11 +18,11 @@ harness loads the module under development without a separate install.
 
 ```bash
 
-box run-script start:lucee5           # also: start:lucee6, start:2023 (Adobe CF), start:boxlang
-box run-script stop:lucee5            # default port 60301
-box run-script logs:lucee5e
+box run-script start:lucee5           # also: start:lucee6, start:2023, start:2025 (Adobe CF), start:boxlang
+box run-script stop:lucee5            # default port 60310
+box run-script logs:lucee5
 
-# ALWAYS check before starting a server: the port is shared.
+# ALWAYS check before starting a server: the port is shared by every engine.
 box server list
 ```
 
@@ -37,12 +37,14 @@ http://127.0.0.1:[port]/tests/runner.cfm?bundles=tests.specs.PageTest # one bund
 http://127.0.0.1:[port]/tests/runner.cfm?directory=tests.specs.unit   # one directory
 ```
 
-CFML specs live in `test-harness/tests/specs/` (`unit/`, `integration/`). Vitest specs sit beside the JS
-they test. Playwright specs are at the repo root in `tests/e2e/`.
+CFML specs live in `test-harness/tests/specs/` (`unit/`, `integration/`). Unit specs extend
+`tests.resources.BaseUnitSpec` (shared settings and exception fixtures); integration specs extend
+`tests.resources.BaseIntegrationSpec` (in-memory mailbox helpers). The integration specs read the
+in-memory mailbox, so unset `ERRORALERTS_MAILER` (remove or edit `.env`) before running them - with
+the SMTP mailer active the mailbox stays empty and the specs fail.
 
-[docs/testing.md](docs/testing.md) covers how to write a spec and the helpers you must use
-(`stubRequestHeaders()`, `primeCurrentUser()`, `deleteRoute()`). Reaching for the obvious alternative
-fails in non-obvious ways, so read it before writing your first integration spec.
+[docs/test-harness.md](docs/test-harness.md) covers the failure scenario catalog on the harness home
+page and how to send its alert emails to a local SMTP server so you can read them as real email.
 
 ## Code style
 

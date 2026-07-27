@@ -37,6 +37,20 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.exception.tagContext[ 1 ].line ).toBe( 42 );
 			} );
 
+			it( "drops driver frames that are not file paths but keeps the first frame", function(){
+				var info        = newExceptionInfo();
+				info.tagContext = [
+					{ template : "|SQLServer|6.0.0.1282|", line : 1085 },
+					{ template : "|SQLServer|6.0.0.1282|", line : 200 },
+					{ template : "/app/models/DbService.cfc", line : 12 }
+				];
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.exception.tagContext.len() ).toBe( 2, "the throw site stays, the second driver frame goes" );
+				expect( payload.exception.tagContext[ 1 ].template ).toInclude( "SQLServer" );
+				expect( payload.exception.tagContext[ 2 ].template ).toBe( "/app/models/DbService.cfc" );
+			} );
+
 			it( "returns an empty exception block for non-exception extraInfo", function(){
 				var payload = builder.build( newLogEvent( extraInfo = { just : "context" } ), "sig-1", 1 );
 				expect( payload.exception ).toBeEmpty();
@@ -47,36 +61,45 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.extraInfo ).toInclude( "context" );
 			} );
 
-			it( "sanitizes rc: masks secrets, truncates, and serializes complex values", function(){
+			it( "sanitizes rc: masks exact key matches, truncates, and serializes complex values", function(){
 				var rc = structNew( "ordered" );
-				rc[ "id" ]       = "42";
-				rc[ "password" ] = "superSecret!";
-				rc[ "apiToken" ] = "abc";
-				rc[ "longText" ] = repeatString( "x", 500 );
-				rc[ "filters" ]  = { status : "active" };
-				rc[ "payload" ]  = toBinary( toBase64( "binary content" ) );
+				rc[ "id" ]           = "42";
+				rc[ "password" ]     = "superSecret!";
+				rc[ "PASSWORD" ]     = "upperSecret!";
+				rc[ "apiToken" ]     = "abc";
+				rc[ "passwordHint" ] = "my hint";
+				rc[ "longText" ]     = repeatString( "x", 500 );
+				rc[ "filters" ]      = { status : "active" };
+				rc[ "payload" ]      = toBinary( toBase64( "binary content" ) );
 				builder.$property( propertyName = "coldbox", mock = newControllerStub( rc ) );
 
 				var result = builder.build( newLogEvent(), "sig-1", 1 ).rc;
 
 				expect( result.id ).toBe( "42" );
-				expect( result.password ).toBe( "*** masked ***" );
-				expect( result.apiToken ).toBe( "*** masked ***", "token substring should mask" );
+				expect( result[ "password" ] ).toBe( "*** masked ***" );
+				expect( result[ "PASSWORD" ] ).toBe( "*** masked ***", "matching ignores case" );
+				expect( result.apiToken ).toBe( "abc", "exact matching must not hide a key that merely contains 'token'" );
+				expect( result.passwordHint ).toBe( "my hint", "a near-miss key must not be masked" );
 				expect( result.longText.len() ).toBeLTE( settings.rcValueMaxLength + 1, "truncated plus ellipsis" );
 				expect( result.filters ).toInclude( "active" );
 				expect( result.payload ).toInclude( "binary" );
 			} );
 
-			it( "captures the ColdBox event and the CGI subset", function(){
+			it( "captures the ColdBox event, routing detail, and the CGI subset", function(){
 				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
 				expect( payload.request.event ).toBe( "orders.save" );
 				expect( payload.request.route ).toBe( "/orders/save" );
+				expect( payload.request.routePattern ).toBe( "orders/:action/" );
+				expect( payload.request.isAjax ).toBe( "no" );
+				expect( payload.request ).toHaveKey( "origin" );
 				expect( payload.request ).toHaveKey( "method" );
 				expect( payload.request ).toHaveKey( "remoteAddr" );
 				expect( payload.request ).toHaveKey( "userAgent" );
+				expect( payload.request ).toHaveKey( "forwardedFor" );
 			} );
 
-			it( "produces empty request and rc blocks when there is no request context", function(){
+			it( "returns placeholder request rows and an empty rc when there is no request context", function(){
 				var broken = createStub();
 				broken.$( "getSetting", "" );
 				broken.$(
@@ -89,8 +112,240 @@ component extends="tests.resources.BaseUnitSpec" {
 				settings.includeScopes.cgi = false;
 
 				var payload = builder.build( newLogEvent(), "sig-1", 1 );
-				expect( payload.request ).toBeEmpty();
+
 				expect( payload.rc ).toBeEmpty();
+				expect( payload.request.event ).toBe( settings.emptyValueText );
+				expect( payload.request.route ).toBe( settings.emptyValueText );
+				expect( payload.request ).toHaveKey( "routePattern", "every routing key survives a broken context" );
+				expect( payload.request ).toHaveKey( "view" );
+				expect( payload.request ).toHaveKey( "origin" );
+				expect( payload.request ).toHaveKey( "context" );
+				expect( payload.request.machine ).notToBe( settings.emptyValueText );
+				expect( payload.request ).notToHaveKey( "user", "no userProvider configured, so no user row" );
+				expect( payload.request ).notToHaveKey( "sessionId", "session scope is off by default" );
+				expect( payload.request ).notToHaveKey( "method", "cgi rows are off" );
+			} );
+
+			it( "reports the origin from the exception's top stack frame", function(){
+				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
+				expect( payload.request.origin ).toBe( "/app/models/OrderService.cfc:42" );
+			} );
+
+			it( "reports the origin from the live call stack when there is no exception", function(){
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.request.origin ).notToBe( settings.emptyValueText );
+				expect( payload.request.origin ).toMatch( ".+:\d+" );
+				expect( payload.request.origin ).notToInclude( "PayloadBuilder.cfc", "the module must skip its own frames" );
+			} );
+
+			it( "trims the app root from paths when relativePaths is on", function(){
+				settings.relativePaths = true;
+				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
+
+				expect( payload.exception.tagContext[ 1 ].template ).toBe( "/models/OrderService.cfc" );
+				expect( payload.request.origin ).toBe( "/models/OrderService.cfc:42" );
+			} );
+
+			it( "reports database detail and caps the SQL", function(){
+				var info            = newExceptionInfo();
+				info.sql            = repeatString( "S", 2500 );
+				info.datasource     = "myDsn";
+				info.sqlState       = "42S02";
+				info.nativeErrorCode = "208";
+				info.where          = "value='4417'";
+				var db = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 ).exception.database;
+
+				expect( db.sql.len() ).toBeLTE( 2001, "2000 characters plus the ellipsis" );
+				expect( db.datasource ).toBe( "myDsn" );
+				expect( db.sqlState ).toBe( "42S02" );
+				expect( db ).toHaveKey( "params" );
+				expect( db.params ).toInclude( "4417" );
+			} );
+
+			it( "leaves query params out when includeQueryParams is off", function(){
+				settings.includeQueryParams = false;
+				var info   = newExceptionInfo();
+				info.sql   = "SELECT 1";
+				info.where = "value='4417'";
+				var db = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 ).exception.database;
+
+				expect( db ).notToHaveKey( "params" );
+			} );
+
+			it( "falls back to Adobe's errNumber spelling for the error code", function(){
+				var info       = newExceptionInfo();
+				info.errNumber = 1234;
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+				expect( payload.exception.errorCode ).toBe( "1234" );
+			} );
+
+			it( "firstOf picks the first key with content and returns '' for none", function(){
+				makePublic( builder, "firstOf" );
+				expect( builder.firstOf( { a : "", b : " ", c : "x" }, [ "a", "b", "c" ] ) ).toBe( "x" );
+				expect( builder.firstOf( { a : "" }, [ "a", "missing" ] ) ).toBe( "" );
+			} );
+
+			it( "walks the cause chain and stops at five levels", function(){
+				var info    = newExceptionInfo();
+				var current = info;
+				for ( var i = 1; i <= 7; i++ ) {
+					current.cause = { type : "Level#i#", message : "cause #i#" };
+					current       = current.cause;
+				}
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.exception.causes.len() ).toBe( 5 );
+				expect( payload.exception.causes[ 1 ].type ).toBe( "Level1" );
+			} );
+
+			it( "does not loop on a self-referencing cause chain", function(){
+				var info   = newExceptionInfo();
+				info.cause = info;
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+				expect( payload.exception.causes.len() ).toBeLTE( 5 );
+			} );
+
+			it( "reads the source snippet around the failing line", function(){
+				settings.codeSnippetLines = 2;
+				var payload = builder.build(
+					newLogEvent(
+						extraInfo = newExceptionInfo(
+							template = expandPath( "/tests/resources/fixtures/snippet.cfm" ),
+							line     = 5
+						)
+					),
+					"sig-1",
+					1
+				);
+				var snippet = payload.exception.snippet;
+
+				expect( snippet.line ).toBe( 5 );
+				expect( snippet.lines.len() ).toBe( 5, "two lines either side of line 5" );
+				expect( snippet.lines[ 1 ].number ).toBe( 3 );
+				expect( snippet.lines[ 3 ].number ).toBe( 5 );
+				expect( snippet.lines[ 3 ].isError ).toBeTrue();
+				expect( snippet.lines[ 3 ].text ).toBe( "fixture line 5" );
+				expect( snippet.lines[ 1 ].isError ).toBeFalse();
+				expect( snippet.lines[ 5 ].number ).toBe( 7 );
+			} );
+
+			it( "returns no snippet when codeSnippetLines is 0 or the file is missing", function(){
+				settings.codeSnippetLines = 0;
+				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
+				expect( payload.exception.snippet.lines ).toBeEmpty();
+
+				settings.codeSnippetLines = 5;
+				var missing = builder.build(
+					newLogEvent( extraInfo = newExceptionInfo( template = "/nope/gone.cfm", line = 5 ) ),
+					"sig-1",
+					1
+				);
+				expect( missing.exception.snippet.lines ).toBeEmpty();
+			} );
+
+			it( "reports the user from the userProvider closure", function(){
+				settings.userProvider = function( wirebox ){
+					return "user-42";
+				};
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.request.user ).toBe( "user-42" );
+			} );
+
+			it( "shows the placeholder when the userProvider throws or returns a non-string", function(){
+				settings.userProvider = function( wirebox ){
+					throw( type = "Broken", message = "provider blew up" );
+				};
+				expect( builder.build( newLogEvent(), "sig-1", 1 ).request.user ).toBe( settings.emptyValueText );
+
+				settings.userProvider = function( wirebox ){
+					return { name : "not a string" };
+				};
+				expect( builder.build( newLogEvent(), "sig-1", 1 ).request.user ).toBe( settings.emptyValueText );
+			} );
+
+			it( "omits the user row when no userProvider is configured", function(){
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.request ).notToHaveKey( "user" );
+			} );
+
+			it( "omits the sessionId row unless includeScopes.session is on", function(){
+				expect( builder.build( newLogEvent(), "sig-1", 1 ).request ).notToHaveKey( "sessionId" );
+
+				settings.includeScopes.session = true;
+				expect( builder.build( newLogEvent(), "sig-1", 1 ).request ).toHaveKey( "sessionId" );
+			} );
+
+			it( "reports the machine, execution context, and heap use", function(){
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.request.machine.len() ).toBeGT( 0 );
+				expect( payload.request.context ).toInclude( "web request" );
+				expect( payload.request.memory ).toMatch( "\d+ MB used of \d+ MB max" );
+			} );
+
+			it( "masks query string values for exact key matches only", function(){
+				makePublic( builder, "maskQueryString" );
+				var masked = builder.maskQueryString( "id=1&token=abc&passwordHint=x&PASSWORD=y&debug" );
+				expect( masked ).toBe( "id=1&token=*** masked ***&passwordHint=x&PASSWORD=*** masked ***&debug" );
+				expect( builder.maskQueryString( "" ) ).toBe( "" );
+			} );
+
+			it( "masks a url-encoded query string name", function(){
+				makePublic( builder, "maskQueryString" );
+				expect( builder.maskQueryString( "pass%77ord=abc" ) ).toBe( "pass%77ord=*** masked ***" );
+			} );
+
+			it( "includes allowlisted headers and refuses credential headers", function(){
+				makePublic( builder, "buildHeaders" );
+				settings.includeHeaders = [ "Content-Type", "Authorization", "Cookie", "X-Request-Id" ];
+				var headers = builder.buildHeaders( {
+					"content-type"  : "application/json",
+					"authorization" : "Bearer shh",
+					"cookie"        : "cfid=1",
+					"X-Request-Id"  : "req-9"
+				} );
+
+				expect( headers[ "Content-Type" ] ).toBe( "application/json" );
+				expect( headers[ "X-Request-Id" ] ).toBe( "req-9" );
+				expect( headers ).notToHaveKey( "Authorization" );
+				expect( headers ).notToHaveKey( "Cookie" );
+			} );
+
+			it( "masks and caps a JSON request body", function(){
+				makePublic( builder, "buildBody" );
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { orderId : 7, apiKey : "shh" } )
+				} );
+
+				expect( body ).toInclude( "7" );
+				expect( body ).notToInclude( "shh", "a JSON field named in maskKeys must be masked" );
+				expect( body ).toInclude( "masked" );
+			} );
+
+			it( "skips form bodies and reports binary bodies by size", function(){
+				makePublic( builder, "buildBody" );
+				expect(
+					builder.buildBody( {
+						headers : { "Content-Type" : "application/x-www-form-urlencoded" },
+						content : "password=shh"
+					} )
+				).toBe( "", "form fields are already in rc, masked" );
+
+				var binary = builder.buildBody( {
+					headers : {},
+					content : toBinary( toBase64( "binary content" ) )
+				} );
+				expect( binary ).toInclude( "binary" );
+			} );
+
+			it( "truncates an oversized plain-text body and stays off by default", function(){
+				makePublic( builder, "buildBody" );
+				settings.requestBodyMaxLength = 100;
+				var body = builder.buildBody( { headers : {}, content : repeatString( "b", 500 ) } );
+				expect( body.len() ).toBeLTE( 101, "100 characters plus the ellipsis" );
+
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.requestBody ).toBe( "", "includeRequestBody defaults to false" );
 			} );
 
 			it( "maps a digest seed onto the digest payload", function(){
@@ -111,6 +366,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.severity ).toBe( "ERROR" );
 				expect( payload.suppressedCount ).toBe( 97 );
 				expect( payload.appName ).toBe( "StubApp" );
+				expect( payload ).toHaveKey( "machine", "the digest names the server that flushed it" );
 			} );
 		} );
 	}
@@ -118,7 +374,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * newControllerStub
 	 *
-	 * Builds a controller stub with settings and a request collection.
+	 * Builds a controller stub with settings and a request collection. The event
+	 * stub answers every context method PayloadBuilder calls, so a missing stub
+	 * method cannot silently drop the whole routing block into its catch.
 	 *
 	 * @rc The request collection the stubbed context returns.
 	 */
@@ -126,6 +384,13 @@ component extends="tests.resources.BaseUnitSpec" {
 		var eventStub = createStub();
 		eventStub.$( "getCurrentEvent", "orders.save" );
 		eventStub.$( "getCurrentRoutedUrl", "/orders/save" );
+		eventStub.$( "getCurrentRoute", "orders/:action/" );
+		eventStub.$( "getCurrentRouteName", "orderSave" );
+		eventStub.$( "getCurrentRoutedModule", "" );
+		eventStub.$( "getCurrentRoutedNamespace", "" );
+		eventStub.$( "getCurrentView", "orders/save" );
+		eventStub.$( "getCurrentLayout", "Main.cfm" );
+		eventStub.$( "isAjax", false );
 		eventStub.$( "getCollection", arguments.rc );
 
 		var requestServiceStub = createStub();
@@ -133,6 +398,8 @@ component extends="tests.resources.BaseUnitSpec" {
 
 		var controllerStub = createStub();
 		controllerStub.$( "getRequestService", requestServiceStub );
+		controllerStub.$( "getWireBox", createStub() );
+		controllerStub.$( "getAppRootPath", "/app/" );
 		controllerStub.$( "getSetting" ).$callback( function( required name ){
 			switch ( arguments.name ) {
 				case "appName":

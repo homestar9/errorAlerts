@@ -67,7 +67,7 @@ function testError( event, rc, prc ){
 }
 ```
 
-Visit the action in your browser. You should receive an email containing the error message, exception details, route, stack frames, and a sanitized copy of the request collection.
+Visit the action in your browser. You should receive an email containing the error message, exception details, the source lines around the failing line, the route, stack frames, and a sanitized copy of the request collection.
 
 Remove the test action after confirming delivery.
 
@@ -197,6 +197,33 @@ Category matching is case-insensitive and checks the beginning of the category. 
 - `cbmailservices` prevents a failed alert email from generating another alert.
 - `coldbox.system.Bootstrap` prevents duplicate emails for unhandled exceptions.
 
+### Identify the logged-in user
+
+Set `userProvider` to a closure that receives WireBox and returns a display string. The alert's Request section then shows who was signed in when the error happened. This example uses [cbauth](https://forgebox.io/view/cbauth):
+
+```cfc
+userProvider : function( wirebox ){
+    var auth = wirebox.getInstance( "AuthenticationService@cbauth" );
+    if ( !auth.isLoggedIn() ) {
+        return "";
+    }
+    var user = auth.getUser();
+    return "#user.getName()# <#user.getEmailAddress()#> (id #user.getId()#)";
+}
+```
+
+Return `""` when nobody is signed in. Errors thrown by the closure are swallowed so a broken provider can never stop an alert; the row simply shows the `emptyValueText` placeholder.
+
+### Include the request body for API endpoints
+
+A failing JSON API call shows no input by default, because the posted body never reaches `rc`. Turn the body on for API-heavy applications:
+
+```cfc
+includeRequestBody : true
+```
+
+JSON bodies get their top-level fields masked with `maskKeys` and are capped at `requestBodyMaxLength` characters. Form posts stay excluded because the `rc` table already shows those fields, masked.
+
 ### Write test emails to files
 
 For local testing without SMTP, use synchronous delivery in `config/modules/errorAlerts.cfc`:
@@ -269,11 +296,24 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `normalizeSignatures` | `true` | Replaces digit runs and UUIDs before errors are grouped. |
 | `maxBodyBytes` | `102400` | Maximum rendered email size. Lower-priority sections are removed first. |
 | `rcValueMaxLength` | `200` | Maximum rendered length of each request-collection value. |
-| `stackFrames` | `10` | Maximum stack frames shown in an alert. |
-| `includeScopes` | `{ rc: true, cgi: true, extraInfo: true }` | Controls which diagnostic sections are included. |
-| `maskKeys` | Password/token-related names | Request keys whose values are replaced with `*** masked ***`. Matching is by substring. |
+| `stackFrames` | `10` | Maximum stack frames shown in an alert. Frames whose template is not a file path, such as JDBC driver internals, are skipped after the first frame. |
+| `includeScopes` | `{ rc: true, cgi: true, extraInfo: true, session: false }` | Controls which diagnostic sections are included. `session` adds a `sessionId` row so alerts from one visitor can be tied together. |
+| `codeSnippetLines` | `5` | Source lines shown either side of the failing line, with the failing line highlighted. `0` turns the snippet off. Costs one file read per alert and puts application source in the email. |
+| `userProvider` | `""` | A closure that receives WireBox and returns a display string for the signed-in user. See the recipe below. The `user` row only appears when this is set. |
+| `relativePaths` | `false` | When `true`, trims the application root from file paths so a path reads `/handlers/Main.cfc`. |
+| `includeQueryParams` | `true` | Include the bound parameter values from a failed query. The best data for reproducing a database error, but the values can contain whatever a visitor typed, and `maskKeys` cannot filter them because they carry no field names. |
+| `maskQueryString` | `true` | Apply `maskKeys` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
+| `emptyValueText` | `"N/A"` | Placeholder shown for a request value the request did not provide. |
+| `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section, matched ignoring case. `Cookie` and `Authorization` are never included, even when listed. |
+| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their top-level fields masked with `maskKeys`; form posts are skipped because `rc` already shows them masked. |
+| `requestBodyMaxLength` | `4000` | Maximum characters of request body shown. |
+| `maskKeys` | Password/token-related names | Request keys and query-string fields whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. |
 
-The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Add any application-specific secret names before using alerts in production.
+The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Matching is an exact, case-insensitive comparison: `password` does **not** cover `newPassword` or `passwordConfirm`. Check the real field names your forms post and list every variant before using alerts in production.
+
+### Upgrading from 2.0
+
+`maskKeys` matching changed from substring to exact in 2.1.0. A key such as `apiToken`, which the `token` entry used to mask by substring, is no longer masked unless you list it explicitly. Before upgrading, audit your forms and add every sensitive field name to `maskKeys` in `config/modules/errorAlerts.cfc`.
 
 ## Troubleshooting
 
@@ -340,7 +380,7 @@ A custom notifier does not require `to`. It must contain its own failures and mu
 - Throttle counters and pending digests are lost on application restart or `fwreinit`.
 - Throttling is per JVM, so web-farm nodes do not share counters.
 - The default queued delivery avoids blocking the failing request, but delivery timing depends on the cbmailservices scheduler.
-- Request values are truncated and common secret-looking keys are masked, but you should review `maskKeys` for your application.
+- Request values are truncated and keys named in `maskKeys` are masked, but the match is exact: review `maskKeys` and list every sensitive field name your application actually uses.
 
 ## Contributing
 
@@ -354,7 +394,7 @@ To run the harness on another engine, swap the start script: `box run-script sta
 
 The harness home page at <http://127.0.0.1:60310/> lists every failure scenario the module can be tested against, and can send the resulting alerts to a local SMTP server so you can read them as real email. See [docs/test-harness.md](docs/test-harness.md).
 
-Releases must use `box run-script release`; do not run `box publish` directly from the repository root.
+Releases must use `box run-script publish:release`; do not run `box publish` directly from the repository root.
 
 ## License
 

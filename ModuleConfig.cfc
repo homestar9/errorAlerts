@@ -66,9 +66,57 @@ component {
 			maxBodyBytes         : 102400,
 			rcValueMaxLength     : 200,
 			stackFrames          : 10,
-			includeScopes        : { rc : true, cgi : true, extraInfo : true },
-			// Mask an rc value when its key contains one of these strings,
-			// ignoring case. Removing a term can expose matching values in email.
+			/* session adds the session id so repeat alerts from one visitor can be
+			 * tied together. Off by default: a live session id in an email is
+			 * enough to impersonate that visitor. */
+			includeScopes        : { rc : true, cgi : true, extraInfo : true, session : false },
+			/* Lines of source either side of the failing line, shown in the email
+			 * the way ColdBox's Whoops page shows them. 0 turns it off. Costs one
+			 * file read per alert and puts application source in the email. */
+			codeSnippetLines     : 5,
+			/* Describes the logged-in user for the "user" row. Set a closure that
+			 * receives WireBox and returns a display string, or "" for nobody.
+			 * A closure keeps the module independent of any auth library:
+			 *   userProvider : function( wirebox ){
+			 *       var auth = wirebox.getInstance( "authenticationService@cbauth" );
+			 *       return auth.isLoggedIn() ? auth.getUser().getEmail() : "";
+			 *   }
+			 * Errors thrown by the closure are swallowed, never sent. */
+			userProvider         : "",
+			// Shorten file paths in the origin and stack frames by removing the
+			// application root, so a path reads "/handlers/Main.cfc". Set false to
+			// keep the full absolute path.
+			relativePaths        : false,
+			/* Include the bound parameter values from a failed query. Best field
+			 * for reproducing a database error, but it prints whatever a visitor
+			 * typed, and maskKeys cannot filter it because the values carry no
+			 * field names. Set false to leave them out. */
+			includeQueryParams   : true,
+			// Also apply maskKeys to the query string shown in the Request
+			// section. Set false to print the query string exactly as sent.
+			// Turning this off can put a secret from a GET request in email.
+			maskQueryString      : true,
+			// Text shown in the Request section for a value the request did not
+			// provide. `route` and `path` are only set on routed URLs, `referer`
+			// only when the browser sent one, and forwardedFor only behind a proxy.
+			emptyValueText       : "N/A",
+			/* Request headers named here are shown in the Request section, matched
+			 * ignoring case. Cookie and Authorization are never included, even
+			 * when listed here: both carry credentials. */
+			includeHeaders       : [ "Content-Type" ],
+			/* Include the raw request body in the email. Off by default. A JSON or
+			 * API request puts its payload in the body, not in rc, so a failing
+			 * API call is otherwise invisible. JSON bodies get their top-level
+			 * fields masked with maskKeys. Form posts are skipped because the rc
+			 * table already shows those fields, masked. */
+			includeRequestBody   : false,
+			// Cap the request body at this many characters.
+			requestBodyMaxLength : 4000,
+			/* Mask the value of any rc key or query string field named here.
+			 * The match is exact apart from case, so every field an application
+			 * wants hidden must be listed by its real name. `password` does not
+			 * cover `newPassword`. These defaults are only the common names —
+			 * check the actual form field names in your own app and add them. */
 			maskKeys             : [
 				"password",
 				"passwd",

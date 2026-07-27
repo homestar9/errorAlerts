@@ -36,6 +36,13 @@ component singleton accessors="true" {
 		if ( !arguments.payload.rc.isEmpty() ) {
 			middle.append( kvSection( "Request collection (rc)", arguments.payload.rc ) );
 		}
+		if (
+			arguments.payload.keyExists( "requestBody" )
+			&& isSimpleValue( arguments.payload.requestBody )
+			&& arguments.payload.requestBody.len()
+		) {
+			middle.append( section( "Request body", preBlock( arguments.payload.requestBody ) ) );
+		}
 		if ( isSimpleValue( arguments.payload.extraInfo ) && arguments.payload.extraInfo.len() ) {
 			middle.append( section( "Extra info", preBlock( arguments.payload.extraInfo ) ) );
 		}
@@ -59,10 +66,15 @@ component singleton accessors="true" {
 		counts[ "Total occurrences" ] = arguments.payload.totalCount;
 		counts[ "Sent immediately" ]  = arguments.payload.sentCount;
 		counts[ "Suppressed" ]        = arguments.payload.suppressedCount;
-		counts[ "Window" ]            = "#int( arguments.payload.windowSeconds / 60 )# minutes";
+		counts[ "Window" ]            = windowLabel( arguments.payload.windowSeconds );
 		counts[ "First seen" ]        = stamp( arguments.payload.firstSeen );
 		counts[ "Last seen" ]         = stamp( arguments.payload.lastSeen );
 		counts[ "Category" ]          = arguments.payload.category;
+		// Which server flushed this digest. Throttle counts are per JVM, so
+		// behind a load balancer each machine reports its own burst.
+		if ( arguments.payload.keyExists( "machine" ) && toString( arguments.payload.machine ).len() ) {
+			counts[ "Machine" ] = arguments.payload.machine;
+		}
 
 		var middle = [
 			messageSection( arguments.payload ),
@@ -143,7 +155,7 @@ component singleton accessors="true" {
 			meta.append( esc( arguments.payload.environment ) );
 		}
 		meta.append( stamp( arguments.payload.timestamp ) );
-		meta.append( "occurrence #arguments.payload.occurrence# of #arguments.payload.maxPerWindow# sent per #int( arguments.payload.windowSeconds / 60 )#-minute window" );
+		meta.append( "occurrence #arguments.payload.occurrence# of #arguments.payload.maxPerWindow# sent per #windowText( arguments.payload.windowSeconds )# window" );
 
 		return "<tr><td style=""background:##b91c1c;color:##ffffff;padding:14px 20px;"">" &
 		"<div style=""font-size:16px;font-weight:bold;#variables.FONT#"">#esc( arguments.payload.severity )# &middot; #esc( arguments.payload.category )#</div>" &
@@ -195,11 +207,67 @@ component singleton accessors="true" {
 	private string function exceptionSection( required struct exception ){
 		var body = "";
 
+		// Read through locals so an older payload without these keys still renders.
+		var errorCode    = arguments.exception.keyExists( "errorCode" ) ? arguments.exception.errorCode : "";
+		var extendedInfo = arguments.exception.keyExists( "extendedInfo" ) ? arguments.exception.extendedInfo : "";
+		var db           = arguments.exception.keyExists( "database" ) ? arguments.exception.database : {};
+		var causes       = arguments.exception.keyExists( "causes" ) ? arguments.exception.causes : [];
+		var snippet      = arguments.exception.keyExists( "snippet" ) ? arguments.exception.snippet : { lines : [] };
+
 		if ( arguments.exception.type.len() ) {
-			body &= "<div style=""margin:0 0 4px 0;font-size:12px;#variables.MONO#color:##18181b;""><strong>#esc( arguments.exception.type )#</strong></div>";
+			// Adobe puts the SQLSTATE in errorCode for a database error, so the
+			// code would just repeat the sqlState row below. Show it only when
+			// it says something the Database block does not.
+			var showCode = errorCode.len()
+			 && !( db.keyExists( "sqlState" ) && errorCode == db.sqlState );
+			var code = showCode
+			 ? " <span style=""color:##71717a;"">(code #esc( errorCode )#)</span>"
+			 : "";
+			body &= "<div style=""margin:0 0 4px 0;font-size:12px;#variables.MONO#color:##18181b;""><strong>#esc( arguments.exception.type )#</strong>#code#</div>";
 		}
 		if ( arguments.exception.detail.len() ) {
 			body &= preBlock( arguments.exception.detail.left( 1024 ) );
+		}
+
+		// The failing code itself. First because it is usually the whole answer.
+		if ( snippet.lines.len() ) {
+			body &= subTitle( "Source - #snippet.template#:#snippet.line#" );
+			body &= snippetBlock( snippet.lines );
+		}
+
+		// The failing SQL and the driver's own codes. Shown before the stack
+		// frames because on a query failure this is what identifies the problem.
+		if ( db.count() ) {
+			body &= subTitle( "Database" );
+			if ( db.keyExists( "sql" ) ) {
+				body &= preBlock( db.sql );
+			}
+			var codes = structNew( "ordered" );
+			for ( var key in db ) {
+				if ( key != "sql" ) {
+					codes[ key ] = db[ key ];
+				}
+			}
+			if ( codes.count() ) {
+				body &= kvTable( codes );
+			}
+		}
+
+		if ( extendedInfo.len() ) {
+			body &= subTitle( "Extended info" );
+			body &= preBlock( extendedInfo.left( 1024 ) );
+		}
+
+		// A framework often catches a low-level error and throws its own, which
+		// leaves the real reason here rather than in the message above.
+		if ( causes.len() ) {
+			body &= subTitle( "Caused by" );
+			for ( var cause in causes ) {
+				body &= "<div style=""margin:0 0 4px 0;font-size:12px;#variables.MONO#color:##18181b;"">" &
+				"<strong>#esc( cause.type )#</strong> #esc( cause.message )#" &
+				( cause.detail.len() ? "<br/><span style=""color:##71717a;"">#esc( cause.detail )#</span>" : "" ) &
+				"</div>";
+			}
 		}
 
 		if ( arguments.exception.tagContext.len() ) {
@@ -228,6 +296,18 @@ component singleton accessors="true" {
 	 * @data  The flat struct to render.
 	 */
 	private string function kvSection( required string title, required struct data ){
+		return section( arguments.title, kvTable( arguments.data ) );
+	}
+
+	/**
+	 * kvTable
+	 *
+	 * Renders a flat struct as a label and value table, without a section wrapper,
+	 * so it can also sit inside another section.
+	 *
+	 * @data The flat struct to render.
+	 */
+	private string function kvTable( required struct data ){
 		var rows = [];
 		for ( var key in arguments.data ) {
 			rows.append(
@@ -235,10 +315,46 @@ component singleton accessors="true" {
 				"<td style=""#variables.VALUE_CELL#"">#esc( arguments.data[ key ] )#</td></tr>"
 			);
 		}
-		return section(
-			arguments.title,
-			"<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"">#rows.toList( "" )#</table>"
-		);
+		return "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"">#rows.toList( "" )#</table>";
+	}
+
+	/**
+	 * snippetBlock
+	 *
+	 * Renders numbered source lines with the failing one highlighted in red.
+	 * A table rather than a <pre> block, because Outlook collapses leading
+	 * whitespace in a pre and the indentation is half the point.
+	 *
+	 * @lines Array of { number, text, isError } from PayloadBuilder.
+	 */
+	private string function snippetBlock( required array lines ){
+		var rows = [];
+
+		for ( var item in arguments.lines ) {
+			var bg     = item.isError ? "##fee2e2" : "##ffffff";
+			var color  = item.isError ? "##b91c1c" : "##3f3f46";
+			var weight = item.isError ? "bold" : "normal";
+
+			rows.append(
+				"<tr>" &
+				"<td style=""padding:2px 8px;width:1%;text-align:right;background:#bg#;color:##a1a1aa;font-size:11px;#variables.MONO#"">#esc( item.number )#</td>" &
+				"<td style=""padding:2px 8px;background:#bg#;color:#color#;font-weight:#weight#;font-size:11px;white-space:pre;#variables.MONO#"">#esc( item.text )#</td>" &
+				"</tr>"
+			);
+		}
+
+		return "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"" style=""margin-top:4px;border:1px solid ##e4e4e7;"">#rows.toList( "" )#</table>";
+	}
+
+	/**
+	 * subTitle
+	 *
+	 * A small heading for a block nested inside a section.
+	 *
+	 * @text The heading text.
+	 */
+	private string function subTitle( required string text ){
+		return "<div style=""margin:10px 0 4px 0;color:##71717a;font-size:11px;font-weight:bold;text-transform:uppercase;#variables.FONT#"">#esc( arguments.text )#</div>";
 	}
 
 	/**
@@ -277,12 +393,48 @@ component singleton accessors="true" {
 	private string function footer( required struct payload ){
 		var note = arguments.payload.type == "digest"
 		 ? "This digest summarizes occurrences suppressed after the first #settings.throttle.maxPerWindow# alerts of a window."
-		 : "After #settings.throttle.maxPerWindow# alerts, further occurrences of this error are suppressed for #int( settings.throttle.windowSeconds / 60 )# minutes and summarized in a digest.";
+		 : "After #settings.throttle.maxPerWindow# alerts, further occurrences of this error are suppressed for #windowLabel( settings.throttle.windowSeconds )# and summarized in a digest.";
 
 		return "<tr><td style=""padding:12px 20px;border-top:1px solid ##e4e4e7;background:##fafafa;color:##a1a1aa;font-size:11px;#variables.FONT#"">" &
 		"#note#<br/>" &
 		"signature #esc( arguments.payload.keyExists( "signature" ) ? arguments.payload.signature : "" )# &middot; errorAlerts #esc( arguments.payload.moduleVersion )#" &
 		"</td></tr>";
+	}
+
+	/**
+	 * windowText
+	 *
+	 * Describes a throttle window in whole minutes, or in seconds when it is
+	 * under a minute. Dividing by 60 alone printed "0 minutes" for a short
+	 * window, which is what a test or a fast-cycling window looks like.
+	 *
+	 * @seconds The window length in seconds.
+	 */
+	private string function windowText( required numeric seconds ){
+		if ( arguments.seconds < 60 ) {
+			return "#int( arguments.seconds )#-second";
+		}
+
+		var minutes = int( arguments.seconds / 60 );
+		return "#minutes#-minute";
+	}
+
+	/**
+	 * windowLabel
+	 *
+	 * The same window length worded as a noun, for sentences and table values
+	 * where "10-minute" on its own would not read correctly.
+	 *
+	 * @seconds The window length in seconds.
+	 */
+	private string function windowLabel( required numeric seconds ){
+		if ( arguments.seconds < 60 ) {
+			var secs = int( arguments.seconds );
+			return "#secs# second#secs == 1 ? "" : "s"#";
+		}
+
+		var minutes = int( arguments.seconds / 60 );
+		return "#minutes# minute#minutes == 1 ? "" : "s"#";
 	}
 
 	/**
@@ -310,10 +462,49 @@ component singleton accessors="true" {
 	 */
 	private string function stamp( required any value ){
 		try {
-			return dateTimeFormat( arguments.value, "yyyy-mm-dd HH:nn:ss" );
+			var zone = zoneLabel();
+			return dateTimeFormat( arguments.value, "yyyy-mm-dd HH:nn:ss" ) & ( zone.len() ? " #zone#" : "" );
 		} catch ( any e ) {
 			return toString( arguments.value );
 		}
+	}
+
+	/**
+	 * zoneLabel
+	 *
+	 * Names the timezone the timestamps are written in. An application that sets
+	 * `this.timezone` reports times in that zone rather than the reader's, so a
+	 * bare "16:54:07" is ambiguous. Prefers the application's own setting and
+	 * falls back to the JVM default. Cached, since neither value changes.
+	 */
+	private string function zoneLabel(){
+		if ( variables.keyExists( "cachedZone" ) ) {
+			return variables.cachedZone;
+		}
+
+		var zone = "";
+
+		try {
+			var meta = getApplicationMetadata();
+			if ( meta.keyExists( "timezone" ) && isSimpleValue( meta.timezone ) && meta.timezone.len() ) {
+				zone = meta.timezone;
+			}
+		} catch ( any e ) {
+		}
+
+		if ( !zone.len() ) {
+			try {
+				zone = createObject( "java", "java.util.TimeZone" ).getDefault().getID();
+			} catch ( any e ) {
+			}
+		}
+
+		// Cache only a real label, so one failed lookup is retried next time.
+		if ( zone.len() ) {
+			variables.cachedZone = zone;
+		}
+
+		return zone;
 	}
 
 }

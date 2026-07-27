@@ -84,12 +84,13 @@ shows something other than GET.
 Findings from firing the whole catalog, worth knowing before you read your own
 run:
 
-- **Query-string values are not masked.** `/trigger/maskedRc` masks `password`,
-  `api_key`, `token`, `authorization`, `creditCardNumber` and `cvv` correctly in
-  the Request collection section, but the Request section right above it prints
-  `cgi.query_string` verbatim, secrets and all. Anything passed in a URL reaches
-  the alert email unmasked. `PayloadBuilder.buildRequest()` does not run
-  `sanitizeValue()` over the CGI values the way `buildRc()` does.
+- **Query-string values are masked since 2.1.0.** An earlier run on this catalog
+  found `/trigger/maskedRc` masking secrets in the Request collection section
+  while the Request section above it printed `cgi.query_string` verbatim. The
+  `maskQueryString` setting (on by default) now applies `maskKeys` to the query
+  string row. Note that matching is exact since 2.1.0: `creditCardNumber` is
+  only masked if the app lists it - the default entry `creditcard` no longer
+  covers it by substring.
 - **A REST handler failure alerts twice.** `/api/boom` produces two emails: one
   from `RestHandler.onError()`, which logs at ERROR under the `handlers.Api`
   category and so reaches the appender, and one from the module's `onException`

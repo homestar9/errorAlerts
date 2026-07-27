@@ -48,6 +48,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].subject ).toInclude( "Unhandled exception" );
 				expect( mailbox[ 1 ].body ).toInclude( "interceptor boom" );
 				expect( mailbox[ 1 ].body ).toInclude( "Main.cfc" );
+				expect( mailbox[ 1 ].body ).toInclude( "origin", "the request section always names the origin" );
 			} );
 
 			it( "ignores categories on the ignore list", function(){
@@ -79,6 +80,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 					expect( mailbox[ 4 ].subject ).toInclude( "DIGEST" );
 					expect( mailbox[ 4 ].subject ).toInclude( "2 more times" );
 					expect( mailbox[ 4 ].body ).toInclude( "Total occurrences" );
+					expect( mailbox[ 4 ].body ).toInclude( "1 second", "a sub-minute window must not read as 0 minutes" );
 				} finally {
 					settings.throttle.windowSeconds = original;
 				}
