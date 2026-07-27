@@ -11,6 +11,12 @@ component {
 	 * Configures the test harness.
 	 */
 	function configure(){
+		/* Set ERRORALERTS_MAILER=smtp in .env to send real email to a local SMTP
+		 * server instead of the in-memory mailbox. The TestBox specs read the
+		 * in-memory mailbox, so "default" has to stay the fallback. */
+		var mailer    = getSystemSetting( "ERRORALERTS_MAILER", "default" );
+		var smtpMode  = mailer == "smtp";
+
 		// Configure ColdBox request and exception handling.
 		variables.coldbox = {
 			// Name the test application.
@@ -23,7 +29,8 @@ component {
 			defaultEvent            : "Main.index",
 			// Use a custom exception handler to test the interceptor path.
 			exceptionHandler        : "main.onException",
-			customErrorTemplate     : "",
+			// Show the full error in the browser. This is a local test harness.
+			customErrorTemplate     : "/coldbox/system/exceptions/Whoops.cfm",
 			// Disable caches so tests use current handlers and events.
 			handlerCaching          : false,
 			eventCaching            : false
@@ -39,22 +46,51 @@ component {
 			info      : [ "coldbox.system" ]
 		};
 
+		// Throw from a harness interceptor when rc.harnessFail is set.
+		variables.interceptors = [ { class : "root.interceptors.HarnessFailure", name : "HarnessFailure" } ];
+
 		// Configure dependencies and the module under test.
 		variables.moduleSettings = {
-			// Keep sent mail in memory so tests can inspect it.
 			cbmailservices : {
-				defaultProtocol : "default",
-				mailers         : { "default" : { class : "InMemory" } },
+				defaultProtocol : mailer,
+				mailers         : {
+					// Keep sent mail in memory so tests can inspect it.
+					"default" : { class : "InMemory" },
+					// Send through the cfmail tag to a real SMTP server.
+					"smtp"    : { class : "CFMail" }
+				},
+				/* MailService.newMail() copies these into every mail payload and
+				 * CFMailProtocol hands the payload straight to cfmail. spoolEnable
+				 * has to be false or Adobe writes the mail to disk and sends it on a
+				 * timer, which hides delivery errors. */
+				defaults        : {
+					server      : getSystemSetting( "ERRORALERTS_SMTP_SERVER", "127.0.0.1" ),
+					port        : getSystemSetting( "ERRORALERTS_SMTP_PORT", 25 ),
+					spoolEnable : false
+				},
 				runQueueTask    : false
 			},
 			errorAlerts : {
-				to            : "alerts@example.com",
-				from          : "harness@example.com",
+				to            : getSystemSetting( "ERRORALERTS_TO", "alerts@example.com" ),
+				from          : getSystemSetting( "ERRORALERTS_FROM", "harness@example.com" ),
 				subjectPrefix : "[Harness]",
 				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send"
 			}
 		};
+
+		/* Shorten the throttle window during SMTP preview so a digest email arrives
+		 * about a minute after a burst instead of ten. ColdBox merges module
+		 * settings one level deep, so every throttle key has to be listed here.
+		 * maxPerWindow stays at 3 because EndToEndAlertTest asserts 3-of-5. */
+		if ( smtpMode ) {
+			variables.moduleSettings.errorAlerts.throttle = {
+				maxPerWindow         : 3,
+				windowSeconds        : 60,
+				maxTrackedSignatures : 500
+			};
+			variables.moduleSettings.errorAlerts.digestFlushSeconds = 20;
+		}
 	}
 
 	/**

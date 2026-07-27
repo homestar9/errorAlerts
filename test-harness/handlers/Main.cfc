@@ -6,10 +6,14 @@ component {
 	/**
 	 * index
 	 *
-	 * Returns a message that confirms the harness is running.
+	 * Renders the scenario catalog.
 	 */
 	function index( event, rc, prc ){
-		return "errorAlerts harness up";
+		prc.mailer       = getSetting( "moduleSettings" ).cbmailservices.defaultProtocol;
+		prc.mailDefaults = getSetting( "moduleSettings" ).cbmailservices.defaults;
+		prc.alerts       = getSetting( "moduleSettings" ).errorAlerts;
+		prc.database     = getInstance( "DbService" ).describe();
+		event.setView( "main/index" );
 	}
 
 	/**
@@ -50,6 +54,9 @@ component {
 		} catch ( any e ) {
 			out.append( "mailService=FAIL #e.message#" );
 		}
+
+		out.append( "mailer=" & getSetting( "moduleSettings" ).cbmailservices.defaultProtocol );
+		out.append( "database=" & getInstance( "DbService" ).describe() );
 
 		controller.getLogBox().getLogger( "diagTest" ).error( "diag boom" );
 

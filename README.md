@@ -352,6 +352,8 @@ box testbox run
 
 To run the harness on another engine, swap the start script: `box run-script start:boxlang` (BoxLang), `box run-script start:lucee5` (Lucee 5), `box run-script start:lucee6` (Lucee 6), or `box run-script start:2025` (Adobe 2025). All engines use the same port, so stop one before starting another.
 
+The harness home page at <http://127.0.0.1:60310/> lists every failure scenario the module can be tested against, and can send the resulting alerts to a local SMTP server so you can read them as real email. See [docs/test-harness.md](docs/test-harness.md).
+
 Releases must use `box run-script release`; do not run `box publish` directly from the repository root.
 
 ## License

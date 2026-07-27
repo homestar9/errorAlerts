@@ -17,10 +17,11 @@
         }
     },
     "jvm":{
-        "heapSize":"512"
+        "heapSize":"512",
+        "javaVersion":"openjdk17_jdk"
     },
     "openBrowser":false,
     "scripts":{
-        "onServerInstall":"cfpm install zip,mail"
+        "onServerInstall":"cfpm install zip,mail,derby"
     }
 }
