@@ -36,7 +36,9 @@ component {
 			// Do not copy archives into the release package.
 			"\.(zip|tar|tar\.gz|tgz|7z|rar)$",
 			// Exclude every top-level hidden file and directory.
-			"^[\\/]?\..*"
+			"^[\\/]?\..*",
+			// Exclude the logo
+			"^[\\/]?errorAlerts-logo\.avif$"
 		];
 
 		// Recreate the build output directories.

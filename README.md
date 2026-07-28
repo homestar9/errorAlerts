@@ -1,5 +1,7 @@
 # errorAlerts
 
+![errorAlerts Logo](https://github.com/homestar9/errorAlerts/blob/main/errorAlerts-logo.avif?raw=true)
+
 `errorAlerts` emails you when a ColdBox application has an unhandled exception or logs an `ERROR` or `FATAL` message.
 
 It is designed to be safe during an error storm. By default, the first three occurrences of the same error are emailed immediately. Additional occurrences are counted and sent later in one digest instead of flooding your inbox.
