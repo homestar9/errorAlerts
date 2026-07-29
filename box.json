@@ -38,13 +38,13 @@
         "cbmailservices":"modules/cbmailservices/"
     },
     "scripts":{
-        "build:module":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
         "install:dependencies":"install && cd test-harness && install",
-        "publish:release":"recipe build/release.boxr",
-        "test:release":"task run taskFile=build/TestRelease.cfc",
         "bump:major":"task run taskFile=build/Bump.cfc :level=major",
         "bump:minor":"task run taskFile=build/Bump.cfc :level=minor",
         "bump:patch":"task run taskFile=build/Bump.cfc :level=patch",
+        "bump:prerelease":"task run taskFile=build/Bump.cfc :level=prerelease",
+        "bump:beta":"task run taskFile=build/Bump.cfc :level=preminor :preid=beta",
+        "bump:alpha":"task run taskFile=build/Bump.cfc :level=preminor :preid=alpha",
         "format":"cfformat run models,interceptors,config,ModuleConfig.cfc,test-harness/tests/specs --overwrite",
         "format:check":"cfformat check models,interceptors,config,ModuleConfig.cfc,test-harness/tests/specs ./.cfformat.json",
         "start:2023":"server start serverConfigFile=server-adobe@2023.json",
@@ -61,7 +61,13 @@
         "logs:lucee6":"server log serverConfigFile=server-lucee@6.json --follow",
         "start:2025":"server start serverConfigFile=server-adobe@2025.json",
         "stop:2025":"server stop serverConfigFile=server-adobe@2025.json",
-        "logs:2025":"server log serverConfigFile=server-adobe@2025.json --follow"
+        "logs:2025":"server log serverConfigFile=server-adobe@2025.json --follow",
+        "test:engines":"task run taskFile=build/TestEngines.cfc",
+        "release:hotfix":"task run taskFile=build/Release.cfc target=run :version=`package show version` :skipTests=true",
+        "build:package":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
+        "release:dryrun":"task run taskFile=build/Release.cfc target=run :version=`package show version` :dryRun=true",
+        "release:check":"task run taskFile=build/Doctor.cfc",
+        "release":"task run taskFile=build/Release.cfc target=run :version=`package show version`"
     },
     "testbox":{
         "runner":"http://127.0.0.1:60310/tests/runner.cfm"

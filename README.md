@@ -396,7 +396,7 @@ To run the harness on another engine, swap the start script: `box run-script sta
 
 The harness home page at <http://127.0.0.1:60310/> lists every failure scenario the module can be tested against, and can send the resulting alerts to a local SMTP server so you can read them as real email. See [docs/test-harness.md](docs/test-harness.md).
 
-Releases must use `box run-script publish:release`; do not run `box publish` directly from the repository root.
+Releases must use `box run-script release`; do not run `box publish` directly from the repository root. See [RELEASE.md](RELEASE.md) for the routine and [docs/release-process.md](docs/release-process.md) for why.
 
 ## License
 

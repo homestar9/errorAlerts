@@ -1,59 +1,45 @@
 /**
- * Builds and verifies the errorAlerts release package.
+ * Builds and checks the release package.
  *
- * See docs/release-process.md for the packaging safeguards.
+ * Run it with: box run-script build:package
+ *
+ * What it does, in order: run the test suite, copy the source into a staging folder minus
+ * anything excluded, stamp the version, zip it, count the files to prove nothing went missing,
+ * and write checksums. Everything it produces lands in .artifacts/<slug>/<version>/.
+ *
+ * Settings come from build/build.json. You should not need to edit this file.
  */
 component {
 
 	/**
 	 * init
 	 *
-	 * Sets the build paths, exclusions, and empty output directories.
+	 * Loads the settings and empties the output folders.
 	 */
 	function init(){
-		// Set the build paths.
-		variables.cwd          = getCWD().reReplace( "\.$", "" );
-		variables.artifactsDir = cwd & "/.artifacts";
-		variables.buildDir     = cwd & "/.tmp";
-		// Use the IPv4 address because Windows can resolve localhost to IPv6
-		// while CommandBox listens only on IPv4.
-		variables.testRunner   = "http://127.0.0.1:60310/tests/runner.cfm";
+		variables.config = new BuildConfig( getDirectoryFromPath( getCurrentTemplatePath() ) );
+		variables.s      = variables.config.getSettings();
+		variables.root   = variables.config.getRoot();
 
-		/**
-		 * Lists top-level entries to exclude from the package.
-		 *
-		 * See docs/release-process.md before changing these expressions.
-		 */
-		variables.excludes = [
-			"^[\\/]?build$",
-			// CommandBox installs modules from box.json.
-			"^[\\/]?modules$",
-			"^[\\/]?test-harness$",
-			"^[\\/]?test-results$",
-			"server-.*\.json",
-			"(AGENTS|CLAUDE|DEVNOTES|RELEASE)\.md",
-			"\.bak$",
-			// Do not copy archives into the release package.
-			"\.(zip|tar|tar\.gz|tgz|7z|rar)$",
-			// Exclude every top-level hidden file and directory.
-			"^[\\/]?\..*",
-			// Exclude the logo
-			"^[\\/]?errorAlerts-logo\.avif$"
-		];
+		variables.buildDir     = variables.root & "/" & variables.s.stagingDir;
+		variables.artifactsDir = variables.root & "/" & variables.s.artifactsDir;
 
-		// Recreate the build output directories.
-		[
-			variables.buildDir,
-			variables.artifactsDir
-		].each( function( item ){
+		// Start both folders empty so a build can never include leftovers from the last one.
+		[ variables.buildDir, variables.artifactsDir ].each( function( item ){
 			if ( directoryExists( item ) ) {
 				directoryDelete( item, true );
 			}
 			directoryCreate( item, true, true );
 		} );
 
-		// Map the installed ColdBox source for the build task.
-		fileSystemUtil.createMapping( "coldbox", variables.cwd & "test-harness/coldbox" );
+		// Point a "coldbox" mapping at the installed framework, which some projects need in
+		// order to load their own code during a build. Skipped when the folder is not there.
+		if ( len( trim( variables.s.coldboxMapping ) ) ) {
+			var coldboxPath = variables.root & "/" & variables.s.coldboxMapping;
+			if ( directoryExists( coldboxPath ) ) {
+				fileSystemUtil.createMapping( "coldbox", coldboxPath );
+			}
+		}
 
 		return this;
 	}
@@ -61,131 +47,128 @@ component {
 	/**
 	 * run
 	 *
-	 * Runs the tests, builds the package, and creates checksum files.
+	 * Runs the tests, builds the package, and writes checksums.
 	 *
-	 * @projectName The project name used for resources and slugs.
-	 * @version     The version to build.
-	 * @buildID     The build identifier. When blank, uses the short git commit SHA.
-	 * @branch      The branch to build. When blank, uses the current branch.
+	 * @projectName The name used for the package folder and zip. Defaults to the box.json slug.
+	 * @version     The version being built. Defaults to the box.json version.
+	 * @buildID     The build identifier. When blank, uses the short git commit hash.
+	 * @branch      The branch being built. When blank, reads the current branch.
+	 * @skipTests   Skip the test suite for this run only. Use for a hotfix you have already
+	 *              tested. It prints a warning, because an untested build is a real risk.
 	 */
 	function run(
-		required projectName,
-		version = "1.0.0",
-		buildID = "",
-		branch  = ""
+		string projectName = "",
+		string version     = "",
+		string buildID     = "",
+		string branch      = "",
+		boolean skipTests  = false
 	){
-		if ( !len( trim( arguments.branch ) ) ) {
-			arguments.branch = getCurrentBranch();
+		fillDefaults( arguments );
+
+		if ( arguments.skipTests || !variables.s.runTests ) {
+			var reason = arguments.skipTests ? "asked for with skipTests" : "turned off in build.json";
+			print
+				.line()
+				.boldYellowLine( "WARNING: the test suite was skipped (#reason#)." )
+				.yellowLine( "This package has not been tested by this build." )
+				.line()
+				.toConsole();
+		} else {
+			ensureTestRunnerReachable();
+			runTests();
 		}
-		if ( !len( trim( arguments.buildID ) ) ) {
-			arguments.buildID = getCurrentCommit();
-		}
 
-		// Confirm the test server is available before running the suite.
-		ensureTestRunnerReachable();
-		runTests();
+		// Map the project so a build can load the project's own components if it needs to.
+		fileSystemUtil.createMapping( arguments.projectName, variables.root );
 
-		// Map the project for the build task.
-		fileSystemUtil.createMapping( arguments.projectName, variables.cwd );
-
-		// Build and verify the package.
 		buildSource( argumentCollection = arguments );
-
-		// Create checksum files for the zip.
 		buildChecksums();
 
-		print
-			.line()
-			.boldMagentaLine( "Build Process is done! Enjoy your build!" )
-			.toConsole();
+		print.line().boldMagentaLine( "Build finished. The package is in #variables.exportsDir#" ).toConsole();
 	}
 
 	/**
 	 * runTests
 	 *
-	 * Runs the test suite and stops the build when a test fails.
+	 * Runs the test suite and stops the build when anything fails.
 	 */
 	function runTests(){
-		print.blueLine( "Testing the package, please wait..." ).toConsole();
+		print.blueLine( "Running the test suite, please wait..." ).toConsole();
 
 		command( "testbox run" )
-			.params( runner = variables.testRunner, verbose = false )
+			.params( runner = variables.s.testRunner, verbose = false )
 			.run();
 
 		if ( shell.getExitCode() ) {
-			return error( "Cannot continue building, tests failed!" );
+			return error( "Stopping: the tests failed. Fix them, or use skipTests to build anyway." );
 		}
 	}
 
 	/**
 	 * buildSource
 	 *
-	 * Copies, stamps, packages, and verifies the module source.
+	 * Copies the source into the staging folder, stamps the version, zips it, and checks the
+	 * zip holds everything.
 	 *
-	 * @projectName The project name used for resources and slugs.
-	 * @version     The version to build.
-	 * @buildID     The build identifier. When blank, uses the short git commit SHA.
-	 * @branch      The branch to build.
+	 * @projectName The name used for the package folder and zip.
+	 * @version     The version being built.
+	 * @buildID     The build identifier.
+	 * @branch      The branch being built.
+	 * @skipTests   Accepted so this can be called with the same arguments as run().
 	 */
 	function buildSource(
-		required projectName,
-		version = "1.0.0",
-		buildID = "",
-		branch  = ""
+		string projectName = "",
+		string version     = "",
+		string buildID     = "",
+		string branch      = "",
+		boolean skipTests  = false
 	){
-		if ( !len( trim( arguments.branch ) ) ) {
-			arguments.branch = getCurrentBranch();
-		}
-		if ( !len( trim( arguments.buildID ) ) ) {
-			arguments.buildID = getCurrentCommit();
-		}
+		fillDefaults( arguments );
 
 		print
 			.line()
 			.boldMagentaLine(
-				"Building #arguments.projectName# v#arguments.version#+#arguments.buildID# from #cwd# using the #arguments.branch# branch."
+				"Building #arguments.projectName# #arguments.version#+#arguments.buildID# from the #arguments.branch# branch."
 			)
 			.toConsole();
 
-		ensureExportDir( argumentCollection = arguments );
+		ensureExportDir( arguments.projectName, arguments.version );
 
-		// Create the staging directory.
-		variables.projectBuildDir = variables.buildDir & "/#projectName#";
+		variables.projectBuildDir = variables.buildDir & "/#arguments.projectName#";
 		directoryCreate( variables.projectBuildDir, true, true );
 
-		// Copy the source into the staging directory.
-		print.blueLine( "Copying source to build folder..." ).toConsole();
-		copy( variables.cwd, variables.projectBuildDir );
+		print.blueLine( "Copying source into the staging folder..." ).toConsole();
+		copy( variables.root, variables.projectBuildDir );
 
-		// Add the build marker file. The name ends in +<short git commit SHA>, so the file the
-		// module ships with tells you exactly which commit produced it.
+		// Leave a note naming the commit this package was built from.
 		fileWrite(
-			"#variables.projectBuildDir#/#projectName#-#version#+#buildID#",
-			"Built from commit #buildID# on #dateTimeFormat( now(), "full" )#"
+			"#variables.projectBuildDir#/#arguments.projectName#-#arguments.version#+#arguments.buildID#",
+			"Built from commit #arguments.buildID# on #dateTimeFormat( now(), "full" )#"
 		);
 
-		// Replace version and build placeholders.
-		print.greenLine( "Updating version identifier to #arguments.version#" ).toConsole();
+		// Swap placeholder tokens for the real version and build identifier. A build from the
+		// release branch is stamped with the identifier; anything else is marked a snapshot.
+		print.greenLine( "Stamping version #arguments.version#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
-				path        = "/#variables.projectBuildDir#/**",
+				path        = "#variables.projectBuildDir#/**",
 				token       = "@build.version@",
 				replacement = arguments.version
 			)
 			.run();
 
-		print.greenLine( "Updating build identifier to #arguments.buildID#" ).toConsole();
+		var isReleaseBranch = ( arguments.branch == variables.s.branch );
+		print.greenLine( "Stamping build identifier #arguments.buildID#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
-				path        = "/#variables.projectBuildDir#/**",
-				token       = ( arguments.branch == "main" ? "@build.number@" : "+@build.number@" ),
-				replacement = ( arguments.branch == "main" ? arguments.buildID : "-snapshot" )
+				path        = "#variables.projectBuildDir#/**",
+				token       = ( isReleaseBranch ? "@build.number@" : "+@build.number@" ),
+				replacement = ( isReleaseBranch ? arguments.buildID : "-snapshot" )
 			)
 			.run();
 
-		// Create and verify the zip.
-		var destination = "#variables.exportsDir#/#projectName#-#version#.zip";
-		print.greenLine( "Zipping code to #destination#" ).toConsole();
+		var destination = "#variables.exportsDir#/#arguments.projectName#-#arguments.version#.zip";
+		print.greenLine( "Zipping to #destination#" ).toConsole();
 		cfzip(
 			action    = "zip",
 			file      = "#destination#",
@@ -196,38 +179,64 @@ component {
 
 		verifyZip( destination );
 
-		// Copy box.json next to the zip.
+		// Put a copy of box.json beside the zip so you can read what shipped without unzipping.
 		fileCopy( "#variables.projectBuildDir#/box.json", variables.exportsDir );
+	}
+
+	/********************************************* PRIVATE HELPERS *********************************************/
+
+	/**
+	 * fillDefaults
+	 *
+	 * Fills in any argument left blank: the slug and version from box.json, the branch and
+	 * commit from git. Doing it here means every entry point behaves the same way.
+	 *
+	 * @args The argument struct, changed in place.
+	 */
+	private void function fillDefaults( required struct args ){
+		if ( !len( trim( arguments.args.projectName ?: "" ) ) ) {
+			arguments.args.projectName = variables.config.slug();
+		}
+		if ( !len( trim( arguments.args.version ?: "" ) ) ) {
+			arguments.args.version = variables.config.version();
+		}
+		if ( !len( trim( arguments.args.branch ?: "" ) ) ) {
+			arguments.args.branch = getCurrentBranch();
+		}
+		if ( !len( trim( arguments.args.buildID ?: "" ) ) ) {
+			arguments.args.buildID = getCurrentCommit();
+		}
 	}
 
 	/**
 	 * getCurrentBranch
 	 *
-	 * Reads the branch from .git/HEAD without calling Git.
-	 * Returns "main" when HEAD cannot provide a branch name.
+	 * Reads the current branch from .git/HEAD without needing the git program. Falls back to
+	 * the release branch from build.json when HEAD cannot be read, which happens when building
+	 * from a copy with no .git folder.
 	 */
-	private function getCurrentBranch(){
-		var headFile = variables.cwd & ".git/HEAD";
+	private string function getCurrentBranch(){
+		var headFile = variables.root & "/.git/HEAD";
 		if ( !fileExists( headFile ) ) {
-			return "main";
+			return variables.s.branch;
 		}
 		var head = trim( fileRead( headFile ) );
 		if ( left( head, 16 ) == "ref: refs/heads/" ) {
 			return replace( head, "ref: refs/heads/", "" );
 		}
-		return "main";
+		// A detached HEAD holds a commit hash, not a branch name.
+		return variables.s.branch;
 	}
 
 	/**
 	 * getCurrentCommit
 	 *
-	 * Reads the short (7-character) commit SHA that HEAD points at, straight from the .git
-	 * folder so no Git binary is needed and it still works from an extracted copy. Returns
-	 * "nocommit" when the SHA cannot be found (no .git, or a ref this simple reader cannot
-	 * resolve). Used as the build identifier when none is passed in.
+	 * Reads the short commit hash HEAD points at, straight from the .git folder so the git
+	 * program is not needed and it still works from an extracted copy. Returns "nocommit" when
+	 * there is nothing to read.
 	 */
-	private function getCurrentCommit(){
-		var headFile = variables.cwd & ".git/HEAD";
+	private string function getCurrentCommit(){
+		var headFile = variables.root & "/.git/HEAD";
 		if ( !fileExists( headFile ) ) {
 			return "nocommit";
 		}
@@ -235,18 +244,18 @@ component {
 		var sha  = "";
 
 		if ( left( head, 5 ) == "ref: " ) {
-			// Normal checkout: HEAD names a ref (e.g. "ref: refs/heads/main"). The SHA lives in
-			// .git/<ref>, or in .git/packed-refs once git has packed it.
+			// The usual case: HEAD names a branch, and the hash sits in .git/<ref>, or in
+			// .git/packed-refs once git has tidied it away.
 			var ref     = trim( mid( head, 6, len( head ) ) );
-			var refFile = variables.cwd & ".git/" & ref;
+			var refFile = variables.root & "/.git/" & ref;
 			if ( fileExists( refFile ) ) {
 				sha = trim( fileRead( refFile ) );
 			} else {
-				var packedFile = variables.cwd & ".git/packed-refs";
+				var packedFile = variables.root & "/.git/packed-refs";
 				if ( fileExists( packedFile ) ) {
 					for ( var rawLine in listToArray( fileRead( packedFile ), chr( 10 ) ) ) {
 						var line = trim( rawLine );
-						// A packed line is "<sha> <ref>"; skip comments (#) and peeled tags (^).
+						// Each line reads "<hash> <ref>". Skip comments and peeled tag lines.
 						if ( len( line ) && left( line, 1 ) != "##" && left( line, 1 ) != "^" && right( line, len( ref ) ) == ref ) {
 							sha = listFirst( line, " " );
 							break;
@@ -255,7 +264,7 @@ component {
 				}
 			}
 		} else {
-			// Detached HEAD: the file already holds the raw SHA.
+			// A detached HEAD already holds the hash.
 			sha = head;
 		}
 
@@ -265,11 +274,14 @@ component {
 	/**
 	 * ensureTestRunnerReachable
 	 *
-	 * Stops the build when the test server cannot be reached.
-	 * Checks the web root because requesting runner.cfm would run the tests.
+	 * Stops the build with a clear message when the test server is not answering. Kept separate
+	 * from runTests() so "the server is not running" never reads as "your tests failed".
+	 *
+	 * It asks for the site root rather than the test runner, because asking for the runner
+	 * would start the whole suite.
 	 */
 	private function ensureTestRunnerReachable(){
-		var probeUrl   = reReplaceNoCase( variables.testRunner, "/tests/runner\.cfm.*$", "/" );
+		var probeUrl   = variables.config.probeUrl();
 		var httpResult = "";
 		try {
 			cfhttp(
@@ -283,12 +295,13 @@ component {
 		} catch ( any e ) {
 			httpResult = { statuscode : "0" };
 		}
+		// Anything in the 200s or 300s means the site answered.
 		var statusCode = val( httpResult.statuscode ?: "0" );
 		if ( statusCode < 200 || statusCode >= 400 ) {
 			return error(
-				"Test server unreachable at #probeUrl# (status #statusCode#). "
-				& "Start a server first (box run-script start:2023) and retry. "
-				& "To package source WITHOUT running tests, invoke target=buildSource explicitly."
+				"No answer from the test server at #probeUrl# (status #statusCode#). "
+				& "Start a server first, then run this again. "
+				& "To build without running the tests, add :skipTests=true."
 			);
 		}
 	}
@@ -296,10 +309,10 @@ component {
 	/**
 	 * buildChecksums
 	 *
-	 * Creates SHA-512 and MD5 checksum files next to the zip.
+	 * Writes SHA-512 and MD5 files next to the zip so anyone can confirm a download is intact.
 	 */
 	private function buildChecksums(){
-		print.greenLine( "Building checksums" ).toConsole();
+		print.greenLine( "Writing checksums" ).toConsole();
 		command( "checksum" )
 			.params(
 				path      = "#variables.exportsDir#/*.zip",
@@ -321,10 +334,14 @@ component {
 	/**
 	 * verifyZip
 	 *
-	 * Stops the build when the zip and staging directory have different counts.
-	 * See docs/release-process.md for why this check is required.
+	 * Stops the build when the zip holds fewer files than the staging folder.
 	 *
-	 * @zipPath The absolute path to the new zip.
+	 * This is deliberately simple: it counts files rather than working out what went wrong.
+	 * Counting catches any cause, including the one that started it. A published module once
+	 * shipped without several folders because an ignore rule quietly matched them, and nothing
+	 * failed until every app that installed it broke on startup.
+	 *
+	 * @zipPath The full path of the zip just written.
 	 */
 	private function verifyZip( required string zipPath ){
 		cfzip( action = "list", file = arguments.zipPath, name = "local.zipEntries" );
@@ -335,7 +352,7 @@ component {
 			} )
 			.len();
 
-		// Count only files because cfzip also returns directory rows.
+		// A zip lists folders as entries too, so only count the files.
 		var zippedCount = 0;
 		for ( var row in local.zipEntries ) {
 			if ( row.type == "file" ) {
@@ -345,63 +362,93 @@ component {
 
 		if ( zippedCount != stagedCount ) {
 			return error(
-				"Zip is incomplete: staged #stagedCount# files but the zip holds #zippedCount#. "
-				& "Check .gitignore and variables.excludes for a pattern that is eating source files. "
-				& "Staging dir: #variables.projectBuildDir#"
+				"The zip is incomplete: #stagedCount# files were staged but the zip holds #zippedCount#. "
+				& "Check .gitignore and the excludes in build/build.json for a rule matching source files. "
+				& "Staging folder: #variables.projectBuildDir#"
 			);
 		}
 
-		print.greenLine( "Verified zip contains all #zippedCount# staged files." ).toConsole();
+		print.greenLine( "Checked: the zip holds all #zippedCount# staged files." ).toConsole();
 	}
 
 	/**
 	 * copy
 	 *
-	 * Copies top-level entries that do not match variables.excludes.
+	 * Copies the project into the staging folder, leaving out anything the excludes match.
+	 * Written by hand because directoryCopy with a filter is unreliable on Lucee.
 	 *
-	 * @src     The source directory.
-	 * @target  The target directory.
-	 * @recurse An unused compatibility argument.
+	 * Only top-level names are tested. A folder that survives is copied whole, so a file
+	 * inside it cannot be excluded from here.
+	 *
+	 * @src    The folder to copy from.
+	 * @target The folder to copy into.
 	 */
-	private function copy( src, target, recurse = true ){
+	private function copy( required string src, required string target ){
+		var excludes = variables.config.allExcludes();
+		// Hold this in a plain variable: inside the closures below, "arguments" means the
+		// closure's own arguments, so arguments.target would be missing.
+		var targetDir = arguments.target;
+
 		directoryList(
-			src,
+			arguments.src,
 			false,
 			"path",
 			function( path ){
 				var isExcluded = false;
-				variables.excludes.each( function( item ){
-					if ( path.replaceNoCase( variables.cwd, "", "all" ).reFindNoCase( item ) ) {
+				var name       = relativeName( path );
+				excludes.each( function( pattern ){
+					if ( name.reFindNoCase( pattern ) ) {
 						isExcluded = true;
 					}
 				} );
 				return !isExcluded;
 			}
 		).each( function( item ){
+			var name = relativeName( item );
 			if ( fileExists( item ) ) {
-				print.blueLine( "Copying #item#" ).toConsole();
-				fileCopy( item, target );
+				print.blueLine( "  copy #name#" ).toConsole();
+				fileCopy( item, targetDir );
 			} else {
-				print.greenLine( "Copying directory #item#" ).toConsole();
-				directoryCopy( item, target & "/" & item.replace( src, "" ), true );
+				print.greenLine( "  copy folder #name#" ).toConsole();
+				directoryCopy( item, targetDir & "/" & name, true );
 			}
 		} );
 	}
 
 	/**
+	 * relativeName
+	 *
+	 * Turns a full path into its name relative to the project root, for example
+	 * "models" or "box.json".
+	 *
+	 * Both sides are put into the same shape first. directoryList returns paths using the
+	 * system separator, so comparing them against a path built with a different separator
+	 * quietly matches nothing and leaves the full path in place.
+	 *
+	 * @path The full path to shorten.
+	 */
+	private string function relativeName( required string path ){
+		var normalisedPath = replace( arguments.path, "\", "/", "all" );
+		var normalisedRoot = replace( variables.root, "\", "/", "all" );
+
+		var name = replaceNoCase( normalisedPath, normalisedRoot, "", "one" );
+		// Drop the separators left at either end.
+		return reReplace( reReplace( name, "^[\\/]+", "" ), "[\\/]+$", "" );
+	}
+
+	/**
 	 * ensureExportDir
 	 *
-	 * Creates the versioned artifact directory when needed.
+	 * Creates .artifacts/<name>/<version>/ and remembers it for the rest of the build.
 	 *
-	 * @projectName The project name.
+	 * @projectName The package name.
 	 * @version     The version being built.
 	 */
-	private function ensureExportDir( required projectName, version = "1.0.0" ){
+	private function ensureExportDir( required string projectName, required string version ){
 		if ( structKeyExists( variables, "exportsDir" ) && directoryExists( variables.exportsDir ) ) {
 			return;
 		}
-		variables.exportsDir = variables.artifactsDir & "/#projectName#/#arguments.version#";
+		variables.exportsDir = variables.artifactsDir & "/#arguments.projectName#/#arguments.version#";
 		directoryCreate( variables.exportsDir, true, true );
 	}
-
 }

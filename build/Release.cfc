@@ -1,246 +1,465 @@
 /**
- * Release helpers for the publish:release recipe (build/release.boxr).
+ * Releases the project: check, build, publish, tag, and create a GitHub Release.
  *
- * Two targets, run at opposite ends of the recipe:
+ * Run it with: box run-script release
  *
- *   preflight — every check that should stop a release BEFORE anything irreversible happens
- *               (before `git checkout -f` can discard work, and before ForgeBox gets the zip).
- *   github    — runs AFTER a successful ForgeBox publish: creates the version tag, pushes it,
- *               and creates a GitHub Release with notes from changelog.md and the built zip
- *               plus its checksum attached.
+ * The order matters. Everything that could stop a release happens before anything permanent:
+ * the checks run before the forced checkout that would throw away uncommitted work, and before
+ * ForgeBox receives anything. Once a version is published it cannot be taken back, so every
+ * failure after that point prints the exact commands to finish by hand.
  *
- * Both take the version from the recipe via :version=`package show version`, so the version
- * lives in exactly one place: box.json.
+ * Targets you can run on their own:
+ *   run       Everything, in order. This is what box run-script release calls.
+ *   preflight Just the checks.
+ *   github    Just the tag and GitHub Release, for finishing a release that stopped halfway.
+ *
+ * Settings come from build/build.json. You should not need to edit this file.
  */
 component {
 
 	/**
-	 * Everything that must be true before a release is allowed to start. Each check aborts the
-	 * recipe with a plain-English fix. Ordering note for the recipe: this runs BEFORE
-	 * `git checkout -f main`, because -f silently throws away uncommitted changes, and the
-	 * clean-tree check here is what makes that safe.
+	 * init
 	 *
-	 * @version The version being released, e.g. 1.0.0 (from `package show version`)
+	 * Loads the settings.
 	 */
-	function preflight( required string version ){
-		// 1. Clean working tree. `git status --porcelain` prints one line per change; empty
-		//    output means clean. This must pass before the recipe's `git checkout -f`.
-		var status = execNative( "git status --porcelain" );
-		if ( status.exitCode != 0 ) {
-			return error( "Could not run git (#status.output#). Is this a git checkout?" );
-		}
-		if ( len( trim( status.output ) ) ) {
-			return error(
-				"Working tree is not clean. Commit or stash first, then re-run. Changes:" & chr( 10 ) & status.output
-			);
-		}
-
-		// 2. Releases only cut from main.
-		var branch = execNative( "git rev-parse --abbrev-ref HEAD" );
-		if ( trim( branch.output ) != "main" ) {
-			return error( "Releases are cut from main, but you are on '#trim( branch.output )#'." );
-		}
-
-		// 3. The version must not already be tagged. rev-parse exits non-zero when the tag does
-		//    not exist, which is the good case here.
-		var tagCheck = execNative( "git rev-parse -q --verify refs/tags/v#arguments.version#" );
-		if ( tagCheck.exitCode == 0 ) {
-			return error(
-				"Tag v#arguments.version# already exists, so this version has already been released. "
-				& "Bump the version in box.json first."
-			);
-		}
-
-		// 4. changelog.md must have a section for this version. This is what forces the
-		//    changelog to be written BEFORE a release can ship; the same section becomes the
-		//    GitHub Release notes in github() below.
-		extractChangelogSection( arguments.version );
-
-		// 5. The gh CLI must be present and logged in. Checking now, rather than letting the
-		//    github target discover it, avoids a half-released state where ForgeBox has the
-		//    version but GitHub has no tag or release.
-		var ghCheck = execNative( "gh auth status" );
-		if ( ghCheck.exitCode != 0 ) {
-			return error(
-				"The GitHub CLI is missing or not logged in (run `gh auth login`). "
-				& "Aborting BEFORE the ForgeBox publish so the two stay in sync. Detail: #ghCheck.output#"
-			);
-		}
-
-		print.greenLine( "Preflight passed: clean tree on main, v#arguments.version# is unreleased, changelog entry found, gh is ready." ).toConsole();
+	function init(){
+		variables.config = new BuildConfig( getDirectoryFromPath( getCurrentTemplatePath() ) );
+		variables.s      = variables.config.getSettings();
+		return this;
 	}
 
 	/**
-	 * The GitHub half of the release. The recipe calls this only after `publish` succeeded, so
-	 * every failure message below assumes ForgeBox already has the version and tells you how to
-	 * finish by hand instead of re-running the whole recipe.
+	 * run
 	 *
-	 * @version The version just published, e.g. 1.0.0 (from `package show version`)
-	 * @notesOnly When true, just print the release notes that WOULD be used and stop. No tag,
-	 *            no push, no GitHub Release. Lets you verify the changelog extraction safely.
+	 * The whole release, in order.
+	 *
+	 * @version   The version to release. Defaults to the box.json version.
+	 * @dryRun    Do everything except publish, tag, and push. Prints what it would have run.
+	 *            Use this for your first release, or to test a change to the build.
+	 * @skipTests Skip the test suite. For a hotfix you have already tested.
 	 */
-	function github( required string version, boolean notesOnly = false ){
-		var tagName = "v#arguments.version#";
-		var slug    = deserializeJSON( fileRead( repoPath( "box.json" ) ) ).slug;
+	function run( string version = "", boolean dryRun = false, boolean skipTests = false ){
+		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
+		var tagName        = variables.s.tagPrefix & releaseVersion;
 
-		// Release notes come from this version's changelog.md section (preflight already
-		// proved it exists, but notesOnly can run standalone, so extract defensively).
-		var notes = extractChangelogSection( arguments.version );
+		if ( arguments.dryRun ) {
+			print
+				.line()
+				.boldYellowLine( "DRY RUN: nothing will be published, tagged, or pushed." )
+				.line()
+				.toConsole();
+		}
+
+		// 1. Checks. These run first so nothing permanent has happened if one fails.
+		preflight( version = releaseVersion, dryRun = arguments.dryRun );
+
+		// 2. Line up with the remote, so only what is pushed gets released. This is skipped in
+		//    a dry run because the forced checkout throws away uncommitted work.
+		if ( variables.s.gitSync && !arguments.dryRun ) {
+			syncWithRemote();
+		} else if ( variables.s.gitSync ) {
+			print.yellowLine( "Dry run: skipping git checkout and pull." ).toConsole();
+		}
+
+		// 3. Build. The suite runs here and stops the release if anything fails.
+		runBuild( releaseVersion, arguments.skipTests );
+
+		// 4. Publish to ForgeBox, from the built folder rather than the project root.
+		if ( variables.s.publish.forgebox ) {
+			publishToForgebox( releaseVersion, arguments.dryRun );
+		} else {
+			print.line().yellowLine( "Skipping ForgeBox (publish.forgebox is false in build.json)." ).toConsole();
+		}
+
+		// 5. Tag and create the GitHub Release.
+		if ( variables.s.publish.github ) {
+			github( version = releaseVersion, dryRun = arguments.dryRun );
+		} else {
+			print.yellowLine( "Skipping GitHub (publish.github is false in build.json)." ).toConsole();
+		}
+
+		print.line().toConsole();
+		if ( arguments.dryRun ) {
+			print
+				.boldGreenLine( "Dry run finished. Nothing was published." )
+				.line( "The package was built and checked. Run box run-script release when you are ready." )
+				.toConsole();
+		} else {
+			print.boldGreenLine( "Released #tagName#." ).toConsole();
+		}
+	}
+
+	/**
+	 * preflight
+	 *
+	 * Everything that must be true before a release starts. Each check stops the run with a
+	 * plain explanation of how to fix it.
+	 *
+	 * @version The version being released.
+	 * @dryRun  Soften the checks that only matter for a real release.
+	 */
+	function preflight( string version = "", boolean dryRun = false ){
+		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
+
+		print.boldBlueLine( "=== Checking ===" ).toConsole();
+
+		// 1. git must be available and this must be a repository.
+		var status = variables.config.execNative( "git", [ "status", "--porcelain" ] );
+		if ( status.exitCode == 127 ) {
+			return error( "Could not find git. Install it, or open a new terminal if you installed it recently." );
+		}
+		if ( status.exitCode != 0 ) {
+			return error( "git could not read this folder (#status.output#). Is it a git repository?" );
+		}
+
+		// 2. Nothing uncommitted. This has to pass before the forced checkout later on, which
+		//    would throw those changes away. A dry run never checks out anything, so there it
+		//    is only worth a mention: rehearsing a release while still working is the point.
+		if ( variables.s.requireCleanTree && len( trim( status.output ) ) ) {
+			if ( arguments.dryRun ) {
+				print
+					.yellowLine( "  note  you have uncommitted changes; a real release would stop here" )
+					.toConsole();
+			} else {
+				return fail(
+					"You have uncommitted changes. Commit or stash them, then run this again.",
+					listToArray( status.output, chr( 10 ) ),
+					"Uncommitted"
+				);
+			}
+		}
+
+		// 3. Release only from the branch named in build.json.
+		var branch = variables.config.execNative( "git", [ "rev-parse", "--abbrev-ref", "HEAD" ] );
+		if ( trim( branch.output ) != variables.s.branch ) {
+			return error(
+				"Releases come from the #variables.s.branch# branch, but you are on #trim( branch.output )#. "
+				& "Switch branch, or change ""branch"" in build/build.json."
+			);
+		}
+
+		// 4. This version must not already be released. A missing tag exits non-zero, which is
+		//    the answer we want here.
+		var tagName  = variables.s.tagPrefix & releaseVersion;
+		var tagCheck = variables.config.execNative( "git", [ "rev-parse", "-q", "--verify", "refs/tags/" & tagName ] );
+		if ( tagCheck.exitCode == 0 ) {
+			return error(
+				"Tag #tagName# already exists, so #releaseVersion# has already been released. "
+				& "Raise the version first: box run-script bump:patch"
+			);
+		}
+
+		// 5. The changelog must have a section for this version. This is what makes sure notes
+		//    are written before a release, and those notes become the GitHub Release body.
+		if ( variables.s.publish.github ) {
+			extractChangelogSection( releaseVersion );
+		}
+
+		// 6. The GitHub tool must be installed and signed in. Checking now, rather than after
+		//    publishing, keeps ForgeBox and GitHub from drifting apart.
+		if ( variables.s.publish.github && !arguments.dryRun ) {
+			var ghCheck = variables.config.execNative( "gh", [ "auth", "status" ] );
+			if ( ghCheck.exitCode == 127 ) {
+				return fail(
+					"Could not find the GitHub CLI (gh).",
+					[
+						"Install it from https://cli.github.com, then run: gh auth login",
+						"",
+						"If you have just installed it, open a new terminal. A terminal keeps the",
+						"PATH it started with, so a tool added afterwards looks missing until then."
+					]
+				);
+			}
+			if ( ghCheck.exitCode != 0 ) {
+				return fail(
+					"The GitHub CLI is not signed in, so stopping before anything is published.",
+					[ "gh auth login", "", "What gh said: " & ghCheck.output ]
+				);
+			}
+		}
+
+		print
+			.greenLine( "  ok  clean checkout on #variables.s.branch#" )
+			.greenLine( "  ok  #releaseVersion# has not been released" )
+			.greenLine( variables.s.publish.github ? "  ok  changelog entry found" : "  --  changelog not needed" )
+			.greenLine( variables.s.publish.github && !arguments.dryRun ? "  ok  GitHub CLI ready" : "  --  GitHub CLI not needed" )
+			.toConsole();
+	}
+
+	/**
+	 * github
+	 *
+	 * Tags the release, pushes it, and creates the GitHub Release with the changelog notes and
+	 * the built zip attached.
+	 *
+	 * Run on its own to finish a release that stopped after publishing.
+	 *
+	 * @version   The version being released.
+	 * @notesOnly Print the release notes and stop. Nothing is tagged or pushed.
+	 * @dryRun    Print what would run without doing it.
+	 */
+	function github( string version = "", boolean notesOnly = false, boolean dryRun = false ){
+		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
+		var tagName        = variables.s.tagPrefix & releaseVersion;
+		var slug           = variables.config.slug();
+
+		var notes = extractChangelogSection( releaseVersion );
 		if ( arguments.notesOnly ) {
 			print.line().boldLine( "Release notes for #tagName#:" ).line( notes ).toConsole();
 			return;
 		}
 
-		// The artifact the build just produced. It is attached to the GitHub Release along with
-		// its SHA-512 checksum, so every release carries an immutable copy of exactly what went
-		// to ForgeBox. GitHub release assets are free (no storage or bandwidth charge; the only
-		// limit is 2 GiB per file). To stop attaching them, delete the two paths from the
-		// `gh release create` command below.
-		var zipPath = repoPath( ".artifacts/#slug#/#arguments.version#/#slug#-#arguments.version#.zip" );
+		// The zip the build produced. It goes on the GitHub Release with its checksum, so every
+		// release keeps a copy of exactly what was published.
+		var zipPath = variables.config.repoPath( "#variables.s.artifactsDir#/#slug#/#releaseVersion#/#slug#-#releaseVersion#.zip" );
 		var shaPath = zipPath & ".sha512";
 		if ( !fileExists( zipPath ) ) {
 			return error(
-				"Built zip not found at #zipPath#. The build step should have produced it; "
-				& "run `box run-script build:module` and then `task run taskFile=build/Release.cfc target=github :version=#arguments.version#`."
+				"No built zip at #zipPath#. Build it first: box run-script build:package"
 			);
 		}
 
-		// gh reads the notes from a file so the markdown survives shell quoting untouched.
-		var notesFile = repoPath( ".tmp/release-notes.md" );
+		// gh reads the notes from a file so the markdown arrives untouched.
+		var notesFile = variables.config.repoPath( "#variables.s.stagingDir#/release-notes.md" );
 		if ( !directoryExists( getDirectoryFromPath( notesFile ) ) ) {
 			directoryCreate( getDirectoryFromPath( notesFile ), true, true );
 		}
 		fileWrite( notesFile, notes );
 
-		// Tag the release. Everything after this point names the manual recovery steps, because
-		// ForgeBox already has the version and a re-run of the recipe would refuse at preflight.
-		print.blueLine( "Tagging #tagName#..." ).toConsole();
-		var result = execNative( "git tag #tagName#" );
+		var ghArgs = [ "release", "create", tagName, "--title", tagName, "--notes-file", notesFile ];
+		if ( isPrerelease( releaseVersion ) ) {
+			ghArgs.append( "--prerelease" );
+		}
+		ghArgs.append( zipPath );
+		if ( fileExists( shaPath ) ) {
+			ghArgs.append( shaPath );
+		}
+
+		if ( arguments.dryRun ) {
+			print
+				.line()
+				.boldYellowLine( "Dry run, would now run:" )
+				.line( "  git tag #tagName#" )
+				.line( "  git push origin #variables.s.branch#" )
+				.line( "  git push origin #tagName#" )
+				.line( "  gh " & arrayToList( ghArgs, " " ) )
+				.line()
+				.boldLine( "Release notes it would use:" )
+				.line( notes )
+				.toConsole();
+			return;
+		}
+
+		// From here on, ForgeBox may already hold this version, so every failure explains how
+		// to finish by hand rather than suggesting another full run.
+		print.line().boldBlueLine( "=== Tagging and releasing on GitHub ===" ).toConsole();
+
+		var result = variables.config.execNative( "git", [ "tag", tagName ] );
 		if ( result.exitCode != 0 ) {
 			return error( "Could not create tag #tagName#: #result.output#" );
 		}
 
-		print.blueLine( "Pushing main and #tagName# to origin..." ).toConsole();
-		result = execNative( "git push origin main" );
+		result = variables.config.execNative( "git", [ "push", "origin", variables.s.branch ] );
 		if ( result.exitCode != 0 ) {
-			return error(
-				"Push failed (#result.output#). ForgeBox already has #arguments.version#. Finish by hand:" & chr( 10 )
-				& "  git push origin main && git push origin #tagName#" & chr( 10 )
-				& "  gh release create #tagName# --title #tagName# --notes-file .tmp/release-notes.md #prereleaseFlag( arguments.version )# ""#zipPath#"" ""#shaPath#"""
-			);
+			return failWithManualSteps( "The push failed (#result.output#).", tagName, ghArgs );
 		}
-		result = execNative( "git push origin #tagName#" );
+
+		result = variables.config.execNative( "git", [ "push", "origin", tagName ] );
 		if ( result.exitCode != 0 ) {
-			return error(
-				"Tag push failed (#result.output#). ForgeBox already has #arguments.version#. Finish by hand:" & chr( 10 )
-				& "  git push origin #tagName#" & chr( 10 )
-				& "  gh release create #tagName# --title #tagName# --notes-file .tmp/release-notes.md #prereleaseFlag( arguments.version )# ""#zipPath#"" ""#shaPath#"""
+			return failWithManualSteps( "Pushing the tag failed (#result.output#).", tagName, ghArgs );
+		}
+
+		result = variables.config.execNative( "gh", ghArgs );
+		if ( result.exitCode != 0 ) {
+			return fail(
+				"Creating the GitHub Release failed (#result.output#). The tag is already pushed.",
+				[ "gh " & arrayToList( ghArgs, " " ) ],
+				"Run this to finish"
 			);
 		}
 
-		print.blueLine( "Creating GitHub Release #tagName#..." ).toConsole();
-		result = execNative(
-			"gh release create #tagName# --title #tagName# --notes-file ""#notesFile#"" #prereleaseFlag( arguments.version )# ""#zipPath#"" ""#shaPath#"""
-		);
-		if ( result.exitCode != 0 ) {
-			return error(
-				"GitHub Release failed (#result.output#). The tag is already pushed; create the release by hand:" & chr( 10 )
-				& "  gh release create #tagName# --title #tagName# --notes-file .tmp/release-notes.md #prereleaseFlag( arguments.version )# ""#zipPath#"" ""#shaPath#"""
-			);
-		}
-
-		print
-			.line()
-			.boldGreenLine( "Released #tagName#: ForgeBox published, tag pushed, GitHub Release created." )
-			.toConsole();
+		print.greenLine( "Tagged #tagName# and created the GitHub Release." ).toConsole();
 	}
 
 	/********************************************* PRIVATE HELPERS *********************************************/
 
 	/**
-	 * Run a native OS command and hand back its exit code and text output, without ever
-	 * throwing. Callers decide what a non-zero exit means: for most steps it is a failure, but
-	 * for probes like `git rev-parse --verify` it is the expected answer.
+	 * runBuild
 	 *
-	 * The first word of the command is swapped for a quoted absolute path via findBinary(),
-	 * because on some Windows setups the cmd.exe that CommandBox spawns cannot resolve bare
-	 * names from PATH at all ('git' is not recognized...), while absolute paths work fine.
+	 * Runs Build.cfc and stops the release if the build fails.
 	 *
-	 * @cmd The full native command line, e.g. "git status --porcelain"
+	 * It starts Build.cfc as its own task rather than creating it directly. CommandBox hands a
+	 * task the helpers it needs, such as command() and print, and a component created the
+	 * ordinary way does not get them.
+	 *
+	 * @version   The version being built.
+	 * @skipTests Skip the test suite.
 	 */
-	private struct function execNative( required string cmd ){
-		var binary  = listFirst( arguments.cmd, " " );
-		var rest    = listRest( arguments.cmd, " " );
-		var fullCmd = findBinary( binary ) & ( len( rest ) ? " " & rest : "" );
+	private function runBuild( required string version, boolean skipTests = false ){
+		print.line().boldBlueLine( "=== Building ===" ).toConsole();
 
-		var output = "";
-		var failed = false;
+		var buildFailed = false;
 		try {
-			output = command( "run" ).params( fullCmd ).run( returnOutput = true );
+			command( "task run" )
+				.params(
+					taskFile     = variables.config.buildPath( "Build.cfc" ),
+					target       = "run",
+					":version"   = arguments.version,
+					":skipTests" = arguments.skipTests
+				)
+				.run();
+			buildFailed = ( shell.getExitCode() != 0 );
 		} catch ( any e ) {
-			// The Command DSL throws when the command exits non-zero; the message usually
-			// carries the command's own stderr, which is what the caller wants to show.
-			failed = true;
-			output = e.message & ( len( e.detail ?: "" ) ? " " & e.detail : "" );
+			buildFailed = true;
+			print.redLine( e.message ).toConsole();
 		}
-		var exitCode = val( shell.getExitCode() );
-		if ( failed && exitCode == 0 ) {
-			exitCode = 1;
+
+		if ( buildFailed ) {
+			return error( "Stopping: the build failed, so nothing was published." );
 		}
-		return { exitCode : exitCode, output : trim( output ) };
 	}
 
 	/**
-	 * Find a binary on the JVM's own PATH and return it as a quoted absolute path, e.g.
-	 * "C:\Program Files\Git\cmd\git.exe". Falls back to the bare name when nothing is found,
-	 * which lets the shell try its own lookup (and produces a readable 'not recognized' error
-	 * when the tool genuinely is not installed, e.g. gh). Results are cached per task run.
+	 * syncWithRemote
 	 *
-	 * @name The bare binary name, e.g. "git", "gh"
+	 * Moves to the release branch and pulls, so the release matches what the remote holds. The
+	 * forced checkout is safe because preflight has already proved nothing is uncommitted.
 	 */
-	private string function findBinary( required string name ){
-		if ( !structKeyExists( variables, "binaryCache" ) ) {
-			variables.binaryCache = {};
-		}
-		if ( structKeyExists( variables.binaryCache, arguments.name ) ) {
-			return variables.binaryCache[ arguments.name ];
+	private function syncWithRemote(){
+		print.line().boldBlueLine( "=== Lining up with the remote ===" ).toConsole();
+
+		var result = variables.config.execNative( "git", [ "checkout", "-f", variables.s.branch ] );
+		if ( result.exitCode != 0 ) {
+			return error( "Could not switch to #variables.s.branch#: #result.output#" );
 		}
 
-		var jFile    = createObject( "java", "java.io.File" );
-		var pathEnv  = createObject( "java", "java.lang.System" ).getenv( "PATH" );
-		var resolved = arguments.name;
-		if ( !isNull( pathEnv ) ) {
-			for ( var dir in listToArray( pathEnv, jFile.pathSeparator ) ) {
-				// The empty extension covers Linux/Mac; the others are the Windows launchers.
-				for ( var ext in [ "", ".exe", ".cmd", ".bat" ] ) {
-					var candidate = dir & jFile.separator & arguments.name & ext;
-					if ( fileExists( candidate ) ) {
-						resolved = '"' & candidate & '"';
-						break;
-					}
-				}
-				if ( resolved != arguments.name ) {
-					break;
-				}
+		result = variables.config.execNative( "git", [ "pull", "origin", variables.s.branch ] );
+		if ( result.exitCode != 0 ) {
+			var guidance = [ result.output ];
+			if ( result.output contains "publickey" ) {
+				guidance.append( "" );
+				guidance.append( "git cannot sign in to your remote. Either add your SSH key at" );
+				guidance.append( "https://github.com/settings/ssh/new, or switch the remote to HTTPS:" );
+				guidance.append( "" );
+				guidance.append( "  git remote set-url origin https://github.com/<you>/<repo>.git" );
+				guidance.append( "  gh auth setup-git" );
 			}
+			return fail( "git pull failed.", guidance, "What git said" );
 		}
-
-		variables.binaryCache[ arguments.name ] = resolved;
-		return resolved;
+		print.greenLine( "Up to date with origin/#variables.s.branch#." ).toConsole();
 	}
 
 	/**
-	 * Pull one version's section out of changelog.md: everything between its `## [version]`
-	 * heading and the next `##` heading (or the link-reference block at the bottom). Aborts
-	 * with instructions when the section is missing, which is how preflight forces a changelog
-	 * entry to exist before a release can ship.
+	 * publishToForgebox
 	 *
-	 * @version The version whose section to extract, e.g. 1.0.0
+	 * Publishes from the built folder rather than the project root.
+	 *
+	 * This matters. Publishing from the project root packages using .gitignore, and one broad
+	 * ignore rule can quietly drop source folders from what people install. Publishing the
+	 * folder the build produced sends exactly what the build checked.
+	 *
+	 * @version The version being published.
+	 * @dryRun  Print what would run without doing it.
+	 */
+	private function publishToForgebox( required string version, boolean dryRun = false ){
+		var slug       = variables.config.slug();
+		var publishDir = variables.config.repoPath( "#variables.s.stagingDir#/#slug#" );
+
+		if ( arguments.dryRun ) {
+			print
+				.line()
+				.boldYellowLine( "Dry run, would now publish to ForgeBox:" )
+				.line( "  cd #publishDir#" )
+				.line( "  publish" )
+				.toConsole();
+			return;
+		}
+
+		if ( !directoryExists( publishDir ) ) {
+			return error( "No built folder at #publishDir#. The build should have created it." );
+		}
+
+		print.line().boldBlueLine( "=== Publishing to ForgeBox ===" ).toConsole();
+
+		// Remember where we were, so a failed publish cannot leave the shell inside the
+		// staging folder.
+		var originalDir = shell.pwd();
+		try {
+			command( "cd" ).params( publishDir ).run();
+			command( "publish" ).run();
+			if ( shell.getExitCode() != 0 ) {
+				return error( "Publishing to ForgeBox failed. Check you are signed in: box forgebox whoami" );
+			}
+		} finally {
+			command( "cd" ).params( originalDir ).run();
+		}
+
+		print.greenLine( "Published #slug# #arguments.version# to ForgeBox." ).toConsole();
+	}
+
+	/**
+	 * failWithManualSteps
+	 *
+	 * Stops the release after the package may already be published, printing the exact commands
+	 * that finish the job. Running the release again would refuse, because the version is out.
+	 *
+	 * @reason  What failed.
+	 * @tagName The tag for this release.
+	 * @ghArgs  The arguments for the gh release command.
+	 */
+	private function failWithManualSteps( required string reason, required string tagName, required array ghArgs ){
+		return fail(
+			arguments.reason & " The package may already be published, so finish by hand rather than running the release again.",
+			[
+				"git push origin " & variables.s.branch,
+				"git push origin " & arguments.tagName,
+				"gh " & arrayToList( arguments.ghArgs, " " )
+			],
+			"Run these to finish"
+		);
+	}
+
+	/**
+	 * fail
+	 *
+	 * Stops the task, printing guidance that spans several lines.
+	 *
+	 * CommandBox's error() removes line breaks from its message, so anything longer than a
+	 * sentence arrives as one run-together block. The guidance is printed first, where it keeps
+	 * its shape, and error() is left with the single line that says what went wrong. That is
+	 * also why the guidance appears above the error rather than below it: error() ends the task.
+	 *
+	 * @summary One line saying what went wrong.
+	 * @detail  Lines of guidance to print first.
+	 * @heading A short label for the guidance.
+	 */
+	private function fail( required string summary, array detail = [], string heading = "What to do" ){
+		if ( arrayLen( arguments.detail ) ) {
+			print.line().boldLine( arguments.heading & ":" ).toConsole();
+			for ( var line in arguments.detail ) {
+				print.yellowLine( "  " & line ).toConsole();
+			}
+			print.line().toConsole();
+		}
+		return error( arguments.summary );
+	}
+
+	/**
+	 * extractChangelogSection
+	 *
+	 * Pulls one version's notes out of the changelog: everything between its "## [version]"
+	 * heading and the next "##" heading. Stops the run when the section is missing, which is
+	 * what makes sure notes exist before a release.
+	 *
+	 * A note on hashes: in CFML a doubled ## in a string means one literal #, so the patterns
+	 * below use #### to match a two-hash "## " markdown heading.
+	 *
+	 * @version The version whose notes to pull out.
 	 */
 	private string function extractChangelogSection( required string version ){
-		var changelogPath = repoPath( "changelog.md" );
+		var changelogPath = variables.config.repoPath( variables.s.changelog );
 		if ( !fileExists( changelogPath ) ) {
-			return error( "changelog.md not found at the repo root. Create it before releasing." );
+			return error( "No #variables.s.changelog# in the project root. Create one before releasing." );
 		}
 
 		var lines     = listToArray( fileRead( changelogPath ), chr( 10 ), true );
@@ -248,19 +467,17 @@ component {
 		var inSection = false;
 		for ( var rawLine in lines ) {
 			var line = reReplace( rawLine, chr( 13 ) & "$", "" );
-			// A version heading looks like "## [1.0.0] - 2026-07-24". Matching the literal
-			// "[version]" (instead of interpolating the version into a regex) sidesteps escaping
-			// the dots, and the closing bracket keeps 1.0.0 from matching 1.0.0-beta.1.
-			// ####: a # in a CFML string must be doubled, so this is the two-hash "## " heading level.
+			// A heading looks like "## [1.0.0] - 2026-07-24". Matching the literal [version]
+			// avoids escaping the dots, and the closing bracket keeps 1.0.0 from matching
+			// 1.0.0-beta.1.
 			var isHeading = reFind( "^####\s*\[", line );
 			if ( !inSection && isHeading && line contains "[#arguments.version#]" ) {
 				inSection = true;
 				continue;
 			}
 			if ( inSection ) {
-				// The next version heading (or anything at ## level) ends the section. The
-				// link-reference lines at the bottom ("[1.0.0]: https://...") never start with
-				// ##, but they only appear after the last section, so a lone "[" line ends it too.
+				// The next heading ends the section. The link lines at the bottom never start
+				// with ##, but they only appear after the last section, so they end it too.
 				if ( reFind( "^####\s", line ) || reFind( "^\[.+\]:\s*http", line ) ) {
 					break;
 				}
@@ -270,41 +487,27 @@ component {
 
 		if ( !inSection ) {
 			return error(
-				"changelog.md has no ""## [#arguments.version#]"" section. Move your notes out of "
-				& "[Unreleased] into a dated ""## [#arguments.version#] - YYYY-MM-DD"" section, then re-run."
+				"#variables.s.changelog# has no ""#### [#arguments.version#]"" section. "
+				& "Move your notes out of [Unreleased] into a dated section by running: box run-script bump:patch"
 			);
 		}
 
 		var notes = trim( arrayToList( collected, chr( 10 ) ) );
 		if ( !len( notes ) ) {
-			return error( "The ""## [#arguments.version#]"" section in changelog.md is empty. Write the release notes first." );
+			return error( "The ""#### [#arguments.version#]"" section in #variables.s.changelog# is empty. Write the notes first." );
 		}
 		return notes;
 	}
 
 	/**
-	 * A version with a hyphen (1.0.0-beta.4, 2.0.0-rc.1) is a pre-release by semver, so the
-	 * GitHub Release gets flagged as one. Returns the flag or an empty string.
+	 * isPrerelease
 	 *
-	 * @version The version being released
+	 * A version with a hyphen, such as 1.0.0-beta.4, is a pre-release, so the GitHub Release
+	 * is marked as one.
+	 *
+	 * @version The version being released.
 	 */
-	private string function prereleaseFlag( required string version ){
-		return find( "-", arguments.version ) ? "--prerelease" : "";
-	}
-
-	/**
-	 * Turn a repo-root-relative path into an absolute one, anchored on this file's own location
-	 * (build/Release.cfc → the repo root is one level up).
-	 *
-	 * Naming trap: this method must NOT be called resolvePath. CommandBox's BaseTask already has
-	 * a resolvePath() and its mixin wins over one declared here, silently — and the built-in
-	 * resolves against the TASK FILE's folder, so resolvePath( "box.json" ) hands back
-	 * build/box.json with no hint your own function never ran.
-	 *
-	 * @relative Path relative to the repo root, e.g. "changelog.md"
-	 */
-	private string function repoPath( required string relative ){
-		var buildDir = getDirectoryFromPath( getCurrentTemplatePath() );
-		return reReplace( buildDir, "[\\/]build[\\/]?$", "" ) & "/" & arguments.relative;
+	private boolean function isPrerelease( required string version ){
+		return find( "-", arguments.version ) > 0;
 	}
 }
