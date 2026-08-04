@@ -33,6 +33,11 @@ component singleton accessors="true" {
 		if ( !arguments.payload.request.isEmpty() ) {
 			middle.append( kvSection( "Request", arguments.payload.request ) );
 		}
+		// Engine, Java, ColdBox, and errorAlerts versions. Guarded by keyExists
+		// so a payload from an older module version still renders.
+		if ( arguments.payload.keyExists( "runtime" ) && !arguments.payload.runtime.isEmpty() ) {
+			middle.append( kvSection( "Runtime", arguments.payload.runtime ) );
+		}
 		if ( !arguments.payload.rc.isEmpty() ) {
 			middle.append( kvSection( "Request collection (rc)", arguments.payload.rc ) );
 		}
@@ -75,6 +80,16 @@ component singleton accessors="true" {
 		if ( arguments.payload.keyExists( "machine" ) && toString( arguments.payload.machine ).len() ) {
 			counts[ "Machine" ] = arguments.payload.machine;
 		}
+		// Distinct routes and client addresses seen during the window. "3 routes
+		// from 1 client IP" reads as a crawler; "1 route from 40 IPs" does not.
+		var sampleRow = sampleSummary( arguments.payload, "route" );
+		if ( sampleRow.len() ) {
+			counts[ "Routes" ] = sampleRow;
+		}
+		sampleRow = sampleSummary( arguments.payload, "client" );
+		if ( sampleRow.len() ) {
+			counts[ "Client IPs" ] = sampleRow;
+		}
 
 		var middle = [
 			messageSection( arguments.payload ),
@@ -86,6 +101,37 @@ component singleton accessors="true" {
 			middle,
 			footer( arguments.payload )
 		);
+	}
+
+	/**
+	 * sampleSummary
+	 *
+	 * Formats one digest sample set as "3 distinct: a, b, c", or
+	 * "at least 5 distinct: a, b, c, d, e" when the cap was hit and more
+	 * values were seen. Plain words rather than "5+" because encodeForHtml()
+	 * turns "+" into an entity, which garbles text assertions and screen
+	 * readers. Returns an empty string when the payload has no samples for
+	 * the key, so older digest payloads render without the row.
+	 *
+	 * @payload The digest payload.
+	 * @key     "route" or "client".
+	 */
+	private string function sampleSummary( required struct payload, required string key ){
+		if (
+			!arguments.payload.keyExists( "samples" )
+			|| !arguments.payload.samples.keyExists( arguments.key )
+			|| !arguments.payload.samples[ arguments.key ].len()
+		) {
+			return "";
+		}
+
+		var values   = arguments.payload.samples[ arguments.key ];
+		var overflow = arguments.payload.keyExists( "overflow" )
+		 && arguments.payload.overflow.keyExists( arguments.key )
+		 && arguments.payload.overflow[ arguments.key ];
+		var prefix = overflow ? "at least " : "";
+
+		return "#prefix##values.len()# distinct: #values.toList( ", " )#";
 	}
 
 	/**
@@ -213,6 +259,7 @@ component singleton accessors="true" {
 		var db           = arguments.exception.keyExists( "database" ) ? arguments.exception.database : {};
 		var causes       = arguments.exception.keyExists( "causes" ) ? arguments.exception.causes : [];
 		var snippet      = arguments.exception.keyExists( "snippet" ) ? arguments.exception.snippet : { lines : [] };
+		var callerSnippet = arguments.exception.keyExists( "callerSnippet" ) ? arguments.exception.callerSnippet : { lines : [] };
 
 		if ( arguments.exception.type.len() ) {
 			// Adobe puts the SQLSTATE in errorCode for a database error, so the
@@ -230,9 +277,18 @@ component singleton accessors="true" {
 		}
 
 		// The failing code itself. First because it is usually the whole answer.
+		// With two snippets, "Throw site" and "Application caller" tell the
+		// reader which is which; alone, the familiar "Source" label stays.
 		if ( snippet.lines.len() ) {
-			body &= subTitle( "Source - #snippet.template#:#snippet.line#" );
+			var snippetLabel = callerSnippet.lines.len() ? "Throw site" : "Source";
+			body &= subTitle( "#snippetLabel# - #snippet.template#:#snippet.line#" );
 			body &= snippetBlock( snippet.lines );
+		}
+
+		// The application's own line that asked for the failing work.
+		if ( callerSnippet.lines.len() ) {
+			body &= subTitle( "Application caller - #callerSnippet.template#:#callerSnippet.line#" );
+			body &= snippetBlock( callerSnippet.lines );
 		}
 
 		// The failing SQL and the driver's own codes. Shown before the stack
@@ -271,16 +327,47 @@ component singleton accessors="true" {
 		}
 
 		if ( arguments.exception.tagContext.len() ) {
-			var frames = [];
+			var totalFrames = arguments.exception.keyExists( "totalFrames" ) ? arguments.exception.totalFrames : 0;
+			var frames      = [];
+			var lastIndex   = 0;
+
 			for ( var i = 1; i <= arguments.exception.tagContext.len(); i++ ) {
 				var frame = arguments.exception.tagContext[ i ];
-				var bg    = i % 2 == 0 ? "##f4f4f5" : "##ffffff";
+				// Older payloads have no index/application/fn keys; numbering
+				// then falls back to the row position, exactly as before.
+				var index = frame.keyExists( "index" ) ? frame.index : i;
+				var isApp = frame.keyExists( "application" ) && frame.application;
+				var fn    = frame.keyExists( "fn" ) ? frame.fn : "";
+
+				// A jump in the raw position means frames were skipped, either
+				// driver noise or the gap before a pinned application frame.
+				if ( lastIndex && index > lastIndex + 1 ) {
+					var gap = index - lastIndex - 1;
+					frames.append( omittedRow( "... #gap# #gap == 1 ? "frame" : "frames"# omitted" ) );
+				}
+
+				// Application frames get a blue tint and bold text so the
+				// reader's eye lands on their own code first.
+				var bg     = isApp ? "##dbeafe" : ( i % 2 == 0 ? "##f4f4f5" : "##ffffff" );
+				var color  = isApp ? "##1e40af" : "##3f3f46";
+				var weight = isApp ? "bold" : "normal";
+				var fnNote = fn.len() ? " <span style=""color:##a1a1aa;font-weight:normal;"">&middot; #esc( fn )#</span>" : "";
+
 				frames.append(
-					"<tr><td style=""padding:3px 8px;font-size:11px;#variables.MONO#color:##3f3f46;background:#bg#;"">" &
-					"#i#. #esc( frame.template )#:#esc( frame.line )#" &
+					"<tr><td style=""padding:3px 8px;font-size:11px;#variables.MONO#color:#color#;font-weight:#weight#;background:#bg#;"">" &
+					"#index#. #esc( frame.template )#:#esc( frame.line )##fnNote#" &
 					"</td></tr>"
 				);
+				lastIndex = index;
 			}
+
+			// Say when the list stops short. Without this row a ten-frame email
+			// looks like the whole stack, which misleads during diagnosis.
+			if ( totalFrames > lastIndex ) {
+				var tail = totalFrames - lastIndex;
+				frames.append( omittedRow( "... #tail# more #tail == 1 ? "frame" : "frames"# not shown" ) );
+			}
+
 			body &= "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"" style=""margin-top:6px;border:1px solid ##e4e4e7;"">#frames.toList( "" )#</table>";
 		}
 
@@ -344,6 +431,18 @@ component singleton accessors="true" {
 		}
 
 		return "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"" style=""margin-top:4px;border:1px solid ##e4e4e7;"">#rows.toList( "" )#</table>";
+	}
+
+	/**
+	 * omittedRow
+	 *
+	 * A gray italic row for the stack frame table marking frames that are not
+	 * shown, so the list never looks complete when it is not.
+	 *
+	 * @text The already-plain text to show. Escaped here.
+	 */
+	private string function omittedRow( required string text ){
+		return "<tr><td style=""padding:3px 8px;font-size:11px;#variables.MONO#color:##a1a1aa;font-style:italic;background:##fafafa;"">#esc( arguments.text )#</td></tr>";
 	}
 
 	/**

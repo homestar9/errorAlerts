@@ -68,6 +68,42 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
 			} );
 
+			it( "snapshots the route and client for digest sampling", function(){
+				makePublic( capture, "buildSnapshot" );
+
+				var eventStub = createStub();
+				eventStub.$( "getCurrentRoutedUrl", "blog/hello/" );
+				eventStub.$( "getCurrentEvent", "posts.show" );
+				var requestServiceStub = createStub();
+				requestServiceStub.$( "getContext", eventStub );
+				var controllerStub = createStub();
+				controllerStub.$( "getRequestService", requestServiceStub );
+				capture.$property( propertyName = "coldbox", mock = controllerStub );
+
+				var snapshot = capture.buildSnapshot( newLogEvent() );
+
+				expect( snapshot.route ).toBe( "blog/hello/" );
+				expect( snapshot ).toHaveKey( "client", "the client address is read from the CGI scope" );
+			} );
+
+			it( "leaves the snapshot route blank when there is no request context", function(){
+				makePublic( capture, "buildSnapshot" );
+
+				var broken = createStub();
+				broken.$(
+					method         = "getRequestService",
+					throwException = true,
+					throwType      = "NoContext",
+					throwMessage   = "no request here"
+				);
+				capture.$property( propertyName = "coldbox", mock = broken );
+
+				var snapshot = capture.buildSnapshot( newLogEvent() );
+
+				expect( snapshot.route ).toBe( "" );
+				expect( snapshot.message ).toBe( "Something failed", "the digest fields still fill in" );
+			} );
+
 			it( "flushDigests notifies one digest per expired seed", function(){
 				throttleStub.$( "flushExpired", [ { signature : "a" }, { signature : "b" } ] );
 				capture.flushDigests();

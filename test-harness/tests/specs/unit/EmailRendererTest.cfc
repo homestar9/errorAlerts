@@ -70,6 +70,42 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( html ).toInclude( "fee2e2", "the failing line gets the red background" );
 			} );
 
+			it( "labels the two snippets as throw site and application caller", function(){
+				var payload               = newErrorPayload();
+				payload.exception.snippet = {
+					template : "/modules/qb/BaseGrammar.cfc",
+					line     : 128,
+					lines    : [ { number : 128, text : "return sql;", isError : true } ]
+				};
+				payload.exception.callerSnippet = {
+					template : "/views/posts/_card.cfm",
+					line     : 14,
+					lines    : [ { number : 14, text : "local.cats = args.post.getCategories();", isError : true } ]
+				};
+
+				var html = renderer.renderError( payload );
+				expect( html ).toInclude( "Throw site" );
+				expect( html ).toInclude( "Application caller" );
+				expect( html ).notToInclude( "Source - ", "the plain label is replaced when both snippets exist" );
+			} );
+
+			it( "marks omitted frames and highlights the pinned application caller", function(){
+				var payload                   = newErrorPayload();
+				payload.exception.totalFrames = 16;
+				payload.exception.tagContext  = [
+					{ template : "/modules/qb/BaseGrammar.cfc", line : 128, index : 1, application : false, fn : "" },
+					{ template : "/modules/quick/BaseEntity.cfc", line : 2509, index : 3, application : false, fn : "get" },
+					{ template : "/views/posts/_card.cfm", line : 14, index : 13, application : true, fn : "" }
+				];
+
+				var html = renderer.renderError( payload );
+				expect( html ).toInclude( "1 frame omitted", "the skipped driver frame between raw positions 1 and 3" );
+				expect( html ).toInclude( "9 frames omitted", "the gap before the pinned caller" );
+				expect( html ).toInclude( "3 more frames not shown" );
+				expect( html ).toInclude( "dbeafe", "the application frame gets the blue tint" );
+				expect( html ).toInclude( "_card.cfm" );
+			} );
+
 			it( "renders database detail and suppresses a code that repeats sqlState", function(){
 				var payload                 = newErrorPayload();
 				payload.exception.errorCode = "42S02";
@@ -98,6 +134,21 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( html ).toInclude( "Caused by" );
 				expect( html ).toInclude( "SQLGrammar" );
 				expect( html ).toInclude( "Extended info" );
+			} );
+
+			it( "renders the Runtime section only when the payload carries it", function(){
+				var payload = newErrorPayload();
+				expect( renderer.renderError( payload ) ).notToInclude( "Runtime", "an older payload has no runtime key" );
+
+				payload.runtime = {
+					engine      : "Lucee 5.4.8.2",
+					java        : "11.0.32",
+					coldbox     : "7.2.0",
+					errorAlerts : "9.9.9"
+				};
+				var html = renderer.renderError( payload );
+				expect( html ).toInclude( "Runtime" );
+				expect( html ).toInclude( "5.4.8.2" );
 			} );
 
 			it( "renders the request body section only when present", function(){
@@ -154,6 +205,29 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( html ).toInclude( "Total occurrences" );
 				expect( html ).toInclude( "APOLLO", "the digest names the server that flushed it" );
 				expect( html ).notToInclude( "<style" );
+			} );
+
+			it( "lists the digest's distinct routes and clients with overflow wording", function(){
+				var digest      = newDigestPayload();
+				digest.samples  = {
+					route  : [ "blog/one/", "blog/two/", "blog/three/" ],
+					client : [ "152.163.122.15" ]
+				};
+				digest.overflow = { route : true, client : false };
+
+				var html = renderer.renderDigest( digest );
+				expect( html ).toInclude( "Routes" );
+				expect( html ).toInclude( "at least 3 distinct", "the overflow flag changes the wording" );
+				expect( html ).toInclude( "Client IPs" );
+				expect( html ).toInclude( "1 distinct" );
+				expect( html ).toInclude( "152.163.122.15" );
+			} );
+
+			it( "renders a digest payload without samples, as older module versions built it", function(){
+				var html = renderer.renderDigest( newDigestPayload() );
+				expect( html ).toInclude( "DIGEST" );
+				expect( html ).notToInclude( "Routes" );
+				expect( html ).notToInclude( "Client IPs" );
 			} );
 
 			it( "labels the digest window in seconds or minutes", function(){

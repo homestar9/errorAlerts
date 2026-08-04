@@ -13,6 +13,7 @@ component singleton accessors="true" {
 	property name="throttleService"  inject="ThrottleService@errorAlerts";
 	property name="payloadBuilder"   inject="PayloadBuilder@errorAlerts";
 	property name="wirebox"          inject="wirebox";
+	property name="coldbox"          inject="coldbox";
 
 	/**
 	 * init
@@ -131,17 +132,41 @@ component singleton accessors="true" {
 	/**
 	 * buildSnapshot
 	 *
-	 * Returns the event fields needed to create a later digest.
+	 * Returns the event fields needed to create a later digest, plus the route
+	 * and client address of this occurrence. ThrottleService keeps a small
+	 * distinct-value sample of those two across the window, so the digest can
+	 * say "3 routes from 1 client IP" - the difference between a crawler and a
+	 * broken page. Each read is wrapped so a missing request context only
+	 * leaves the field blank.
 	 *
 	 * @logEvent The LogBox LogEvent being recorded.
 	 */
 	private struct function buildSnapshot( required any logEvent ){
-		return {
+		var snapshot = {
 			message   : arguments.logEvent.getMessage().left( 500 ),
 			category  : arguments.logEvent.getCategory(),
 			severity  : arguments.logEvent.getSeverity(),
-			timestamp : arguments.logEvent.getTimestamp()
+			timestamp : arguments.logEvent.getTimestamp(),
+			route     : "",
+			client    : ""
 		};
+
+		try {
+			var event      = coldbox.getRequestService().getContext();
+			var route      = event.getCurrentRoutedUrl();
+			snapshot.route = toString( route.len() ? route : event.getCurrentEvent() ).left( 200 );
+		} catch ( any e ) {
+		}
+
+		try {
+			// Behind a proxy, remote_addr is the proxy; the forwarded header's
+			// first entry is the real client.
+			var forwarded   = cgi.http_x_forwarded_for;
+			snapshot.client = toString( forwarded.len() ? forwarded.listFirst().trim() : cgi.remote_addr ).left( 200 );
+		} catch ( any e ) {
+		}
+
+		return snapshot;
 	}
 
 	/**

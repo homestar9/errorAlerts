@@ -109,6 +109,58 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( verdict.occurrence ).toBe( 1 );
 			} );
 
+			it( "samples distinct routes and clients, capped with an overflow flag", function(){
+				var settings                    = defaultSettings();
+				settings.throttle.maxPerWindow  = 1;
+				settings.throttle.windowSeconds = 1;
+				settings.digestSampleSize       = 2;
+				service.$property( propertyName = "settings", mock = settings );
+
+				var occurrences = [
+					{ route : "blog/one/", client : "10.0.0.1" },
+					{ route : "blog/one/", client : "10.0.0.1" }, // duplicate, not resampled
+					{ route : "blog/two/", client : "" },         // blank client skipped
+					{ route : "blog/three/", client : "10.0.0.1" } // over the route cap
+				];
+				for ( var extra in occurrences ) {
+					var occurrence = duplicate( snapshot );
+					occurrence.append( extra );
+					service.record( "sig-a", occurrence );
+				}
+				sleep( 1100 );
+
+				var seeds = service.flushExpired();
+				expect( seeds.len() ).toBe( 1 );
+				expect( seeds[ 1 ].samples.route ).toBe( [ "blog/one/", "blog/two/" ], "capped at digestSampleSize" );
+				expect( seeds[ 1 ].overflow.route ).toBeTrue( "a distinct route beyond the cap sets the flag" );
+				expect( seeds[ 1 ].samples.client ).toBe( [ "10.0.0.1" ] );
+				expect( seeds[ 1 ].overflow.client ).toBeFalse();
+			} );
+
+			it( "keeps the sample sets empty when digestSampleSize is 0", function(){
+				var settings                    = defaultSettings();
+				settings.throttle.maxPerWindow  = 1;
+				settings.throttle.windowSeconds = 1;
+				settings.digestSampleSize       = 0;
+				service.$property( propertyName = "settings", mock = settings );
+
+				var occurrence = duplicate( snapshot );
+				occurrence.append( { route : "blog/one/", client : "10.0.0.1" } );
+				service.record( "sig-a", occurrence );
+				service.record( "sig-a", occurrence );
+				sleep( 1100 );
+
+				var seeds = service.flushExpired();
+				expect( seeds[ 1 ].samples.route ).toBeEmpty();
+				expect( seeds[ 1 ].samples.client ).toBeEmpty();
+			} );
+
+			it( "accepts a snapshot without route or client keys", function(){
+				// Older snapshots have no sampling fields at all.
+				var verdict = service.record( "sig-a", snapshot );
+				expect( verdict.action ).toBe( "SEND" );
+			} );
+
 			it( "does not lose counts under concurrent recording", function(){
 				/* Read shared values from the spec variables scope. Adobe
 				 * ColdFusion deep-copies thread attributes, which would give each

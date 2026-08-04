@@ -5,14 +5,22 @@
  */
 component singleton accessors="true" {
 
-	// WireBox injects the module settings.
-	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
+	// WireBox injects these dependencies.
+	property name="settings"        inject="coldbox:moduleSettings:errorAlerts";
+	property name="frameClassifier" inject="FrameClassifier@errorAlerts";
 
 	/**
 	 * compute
 	 *
-	 * Hashes the category, first 200 message characters, and top stack frame.
-	 * A hash collision would group two errors in the same throttle window.
+	 * Hashes the category, first 200 message characters, the top stack frame,
+	 * and the first application-owned stack frame. A hash collision would
+	 * group two errors in the same throttle window.
+	 *
+	 * The application frame matters most for database errors: their top frame
+	 * is always the same framework grammar file, so without the application
+	 * frame two unrelated failing queries would only differ by message text.
+	 * The top frame stays in the hash so one call site that fails two
+	 * different ways still produces two signatures.
 	 *
 	 * @logEvent The LogBox LogEvent to fingerprint.
 	 */
@@ -20,9 +28,37 @@ component singleton accessors="true" {
 		var parts = [
 			arguments.logEvent.getCategory(),
 			normalize( arguments.logEvent.getMessage().left( 200 ) ),
-			topFrame( arguments.logEvent.getExtraInfo() )
+			topFrame( arguments.logEvent.getExtraInfo() ),
+			applicationFrame( arguments.logEvent.getExtraInfo() )
 		];
 		return hash( parts.toList( "|" ), "MD5" ).lcase();
+	}
+
+	/**
+	 * applicationFrame
+	 *
+	 * Returns "template:line" for the first application-owned exception frame,
+	 * using the raw absolute path so display settings cannot change the hash.
+	 * Returns an empty string when no frame qualifies or on any failure.
+	 *
+	 * @extraInfo The log event's extraInfo value, any type.
+	 */
+	private string function applicationFrame( required any extraInfo ){
+		try {
+			if (
+				( isObject( arguments.extraInfo ) || isStruct( arguments.extraInfo ) )
+				&& structKeyExists( arguments.extraInfo, "tagContext" )
+				&& isArray( arguments.extraInfo.tagContext )
+				&& arguments.extraInfo.tagContext.len()
+			) {
+				var found = frameClassifier.findFirstApplicationFrame( arguments.extraInfo.tagContext );
+				if ( !found.isEmpty() ) {
+					return "#found.template#:#found.line#";
+				}
+			}
+		} catch ( any e ) {
+		}
+		return "";
 	}
 
 	/**

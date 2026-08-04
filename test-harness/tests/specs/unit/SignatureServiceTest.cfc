@@ -6,8 +6,17 @@ component extends="tests.resources.BaseUnitSpec" {
 	function run(){
 		describe( "SignatureService", function(){
 			beforeEach( function(){
+				settings   = defaultSettings();
+				classifier = prepareMock( new errorAlerts.models.FrameClassifier() );
+				classifier.$property( propertyName = "settings", mock = settings );
+
+				var controllerStub = createStub();
+				controllerStub.$( "getAppRootPath", "/app/" );
+				classifier.$property( propertyName = "coldbox", mock = controllerStub );
+
 				service = prepareMock( new errorAlerts.models.SignatureService() );
-				service.$property( propertyName = "settings", mock = defaultSettings() );
+				service.$property( propertyName = "settings", mock = settings );
+				service.$property( propertyName = "frameClassifier", mock = classifier );
 			} );
 
 			it( "returns the same hash for identical events", function(){
@@ -68,6 +77,30 @@ component extends="tests.resources.BaseUnitSpec" {
 				var a = service.compute( newLogEvent( message = "plain", extraInfo = { some : "context" } ) );
 				var b = service.compute( newLogEvent( message = "plain", extraInfo = "other context" ) );
 				expect( a ).toBe( b );
+			} );
+
+			it( "separates identical messages thrown from different application call sites", function(){
+				// Same top frame and message, as with two failing queries that
+				// both throw from the framework's SQL grammar file.
+				var infoA        = newDeepExceptionInfo( callerTemplate = "/app/views/posts/_card.cfm" );
+				var infoB        = newDeepExceptionInfo( callerTemplate = "/app/handlers/Posts.cfc" );
+				infoA.message    = "SQL failed";
+				infoB.message    = "SQL failed";
+
+				var a = service.compute( newLogEvent( message = "SQL failed", extraInfo = infoA ) );
+				var b = service.compute( newLogEvent( message = "SQL failed", extraInfo = infoB ) );
+
+				expect( a ).notToBe( b, "different application callers are different bugs" );
+			} );
+
+			it( "does not change the signature when relativePaths flips", function(){
+				var info               = newDeepExceptionInfo();
+				settings.relativePaths = false;
+				var a = service.compute( newLogEvent( extraInfo = info ) );
+				settings.relativePaths = true;
+				var b = service.compute( newLogEvent( extraInfo = info ) );
+
+				expect( a ).toBe( b, "relativePaths only changes display, never grouping" );
 			} );
 		} );
 	}

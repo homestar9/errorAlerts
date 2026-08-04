@@ -6,10 +6,14 @@ component extends="tests.resources.BaseUnitSpec" {
 	function run(){
 		describe( "PayloadBuilder", function(){
 			beforeEach( function(){
-				settings = defaultSettings();
-				builder  = prepareMock( new errorAlerts.models.PayloadBuilder() );
+				settings   = defaultSettings();
+				classifier = prepareMock( new errorAlerts.models.FrameClassifier() );
+				classifier.$property( propertyName = "settings", mock = settings );
+				classifier.$property( propertyName = "coldbox", mock = newControllerStub() );
+				builder = prepareMock( new errorAlerts.models.PayloadBuilder() );
 				builder.$property( propertyName = "settings", mock = settings );
 				builder.$property( propertyName = "coldbox", mock = newControllerStub() );
+				builder.$property( propertyName = "frameClassifier", mock = classifier );
 			} );
 
 			it( "builds the core payload fields", function(){
@@ -33,7 +37,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.exception.type ).toBe( "HarnessBoom" );
 				expect( payload.exception.message ).toBe( "Fixture explosion" );
 				expect( payload.exception.tagContext.len() ).toBe( 2, "frames should cap at settings.stackFrames" );
-				expect( payload.exception.tagContext[ 1 ].template ).toBe( "/app/models/OrderService.cfc" );
+				expect( payload.exception.tagContext[ 1 ].template ).toBe( "/models/OrderService.cfc", "relativePaths defaults to on" );
 				expect( payload.exception.tagContext[ 1 ].line ).toBe( 42 );
 			} );
 
@@ -48,7 +52,7 @@ component extends="tests.resources.BaseUnitSpec" {
 
 				expect( payload.exception.tagContext.len() ).toBe( 2, "the throw site stays, the second driver frame goes" );
 				expect( payload.exception.tagContext[ 1 ].template ).toInclude( "SQLServer" );
-				expect( payload.exception.tagContext[ 2 ].template ).toBe( "/app/models/DbService.cfc" );
+				expect( payload.exception.tagContext[ 2 ].template ).toBe( "/models/DbService.cfc" );
 			} );
 
 			it( "returns an empty exception block for non-exception extraInfo", function(){
@@ -128,7 +132,7 @@ component extends="tests.resources.BaseUnitSpec" {
 
 			it( "reports the origin from the exception's top stack frame", function(){
 				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
-				expect( payload.request.origin ).toBe( "/app/models/OrderService.cfc:42" );
+				expect( payload.request.origin ).toBe( "/models/OrderService.cfc:42" );
 			} );
 
 			it( "reports the origin from the live call stack when there is no exception", function(){
@@ -138,12 +142,78 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.request.origin ).notToInclude( "PayloadBuilder.cfc", "the module must skip its own frames" );
 			} );
 
-			it( "trims the app root from paths when relativePaths is on", function(){
-				settings.relativePaths = true;
+			it( "keeps the full path when relativePaths is off", function(){
+				settings.relativePaths = false;
 				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
 
-				expect( payload.exception.tagContext[ 1 ].template ).toBe( "/models/OrderService.cfc" );
-				expect( payload.request.origin ).toBe( "/models/OrderService.cfc:42" );
+				expect( payload.exception.tagContext[ 1 ].template ).toBe( "/app/models/OrderService.cfc" );
+				expect( payload.request.origin ).toBe( "/app/models/OrderService.cfc:42" );
+			} );
+
+			it( "pins the first application frame that falls past the display cap", function(){
+				var ex = builder.build( newLogEvent( extraInfo = newDeepExceptionInfo() ), "sig-1", 1 ).exception;
+
+				expect( ex.totalFrames ).toBe( 16 );
+				expect( ex.tagContext.len() ).toBe( 11, "ten displayable frames plus the pinned caller" );
+				expect( ex.tagContext[ 11 ].template ).toBe( "/views/posts/_card.cfm" );
+				expect( ex.tagContext[ 11 ].line ).toBe( 14 );
+				expect( ex.tagContext[ 11 ].application ).toBeTrue();
+				expect( ex.tagContext[ 11 ].index ).toBe( 13, "the pinned frame keeps its raw stack position" );
+				expect( ex.tagContext[ 1 ].application ).toBeFalse( "dependency code under /modules/ is not application code" );
+				expect( ex.omittedFrames ).toBe( 5, "sixteen raw frames minus eleven shown" );
+				expect( ex.actionableFrame.index ).toBe( 13 );
+			} );
+
+			it( "adds no pinned frame and no counts noise when no application frame exists", function(){
+				var info        = newExceptionInfo();
+				info.tagContext = [
+					{ template : "/elsewhere/lib/Thing.cfc", line : 5 },
+					{ template : "/coldbox/system/EventHandler.cfc", line : 99 }
+				];
+				var ex = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 ).exception;
+
+				expect( ex.actionableFrame ).toBeEmpty();
+				expect( ex.tagContext.len() ).toBe( 2 );
+				expect( ex.omittedFrames ).toBe( 0 );
+				expect( ex.callerSnippet.lines ).toBeEmpty();
+			} );
+
+			it( "keeps the function name when the engine supplies one", function(){
+				var info = newExceptionInfo();
+				info.tagContext[ 1 ][ "function" ] = "getCategories";
+				info.tagContext[ 2 ][ "id" ]       = "??";
+				var ex = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 ).exception;
+
+				expect( ex.tagContext[ 1 ].fn ).toBe( "getCategories" );
+				expect( ex.tagContext[ 2 ].fn ).toBe( "", "Lucee's '??' placeholder is dropped" );
+			} );
+
+			it( "reads a second snippet at the application caller", function(){
+				settings.codeSnippetLines = 2;
+				// Point the classifier at the real harness root and treat /tests/
+				// as application code, so the readable fixture file qualifies.
+				settings.applicationFramePrefixes = [ "/tests/" ];
+				var harnessRootStub = newControllerStub();
+				harnessRootStub.$( "getAppRootPath", expandPath( "/" ) );
+				classifier.$property( propertyName = "coldbox", mock = harnessRootStub );
+
+				var info = newDeepExceptionInfo(
+					callerTemplate = expandPath( "/tests/resources/fixtures/snippet.cfm" ),
+					callerLine     = 5
+				);
+				var ex = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 ).exception;
+
+				expect( ex.callerSnippet.line ).toBe( 5 );
+				expect( ex.callerSnippet.lines.len() ).toBe( 5, "two lines either side of line 5" );
+				expect( ex.callerSnippet.lines[ 3 ].isError ).toBeTrue();
+				expect( ex.callerSnippet.lines[ 3 ].text ).toBe( "fixture line 5" );
+			} );
+
+			it( "leaves the caller snippet empty when the caller file cannot be read", function(){
+				var ex = builder.build( newLogEvent( extraInfo = newDeepExceptionInfo() ), "sig-1", 1 ).exception;
+
+				expect( ex.callerSnippet.lines ).toBeEmpty( "the fixture path does not exist on disk" );
+				expect( ex.tagContext.len() ).toBeGT( 0, "an unreadable caller file must not suppress the alert" );
 			} );
 
 			it( "reports database detail and caps the SQL", function(){
@@ -280,6 +350,44 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.request.machine.len() ).toBeGT( 0 );
 				expect( payload.request.context ).toInclude( "web request" );
 				expect( payload.request.memory ).toMatch( "\d+ MB used of \d+ MB max" );
+			} );
+
+			it( "builds a copyable request URL from the live request", function(){
+				// The spec itself runs inside a web request, so the CGI scope is real.
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( payload.request ).toHaveKey( "url" );
+				expect( payload.request.url ).toMatch( "^[A-Z]+ https?://.+" );
+			} );
+
+			it( "masks secrets in the request URL's query string", function(){
+				makePublic( builder, "requestUrl" );
+				// The URL row must reuse queryStringValue(), which applies maskKeys.
+				builder.$( "queryStringValue", "token=*** masked ***" );
+
+				// Not named "url": that would collide with the CFML url scope.
+				var urlLine = builder.requestUrl();
+				expect( urlLine ).toInclude( "masked" );
+				expect( urlLine ).toInclude( "?", "the stubbed query string is appended" );
+			} );
+
+			it( "reports the runtime versions and caches them", function(){
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
+				expect( payload ).toHaveKey( "runtime" );
+				expect( payload.runtime ).toHaveKey( "engine" );
+				expect( payload.runtime ).toHaveKey( "java" );
+				expect( payload.runtime.errorAlerts ).toBe( "9.9.9", "the module version comes from the registry" );
+
+				var again = builder.build( newLogEvent(), "sig-1", 1 );
+				expect( again.runtime ).toBe( payload.runtime, "the struct is cached, not rebuilt" );
+			} );
+
+			it( "reports the elapsed request time when the engine exposes it", function(){
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+				// Lucee and BoxLang expose the request start; Adobe shows the
+				// placeholder. Both are acceptable, crashing is not.
+				expect( payload.request ).toHaveKey( "elapsed" );
+				expect( payload.request.elapsed == settings.emptyValueText || payload.request.elapsed.reFind( "^\d+ ms$" ) ).toBeTrue();
 			} );
 
 			it( "masks query string values for exact key matches only", function(){

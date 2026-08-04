@@ -54,6 +54,10 @@ component {
 			},
 			// Check expired throttle windows at this interval.
 			digestFlushSeconds   : 60,
+			/* How many distinct routes and client IPs a digest email lists from
+			 * the occurrences seen during one throttle window. Values past the
+			 * cap are counted but not listed. 0 turns sampling off. */
+			digestSampleSize     : 5,
 			// Ignore category prefixes that would create duplicate or recursive
 			// alerts. Removing cbmailservices can alert on a failed alert email.
 			// Removing coldbox.system.Bootstrap can report one exception twice.
@@ -66,6 +70,21 @@ component {
 			maxBodyBytes         : 102400,
 			rcValueMaxLength     : 200,
 			stackFrames          : 10,
+			/* Path prefixes that mark a stack frame as application code, matched
+			 * against the path relative to the application root. When every shown
+			 * frame is framework code, the first frame matching one of these
+			 * prefixes is added to the email as the "application caller" so the
+			 * developer can see which line of their own code triggered the error.
+			 * /modules/ is deliberately absent: that is where dependencies live. */
+			applicationFramePrefixes : [
+				"/handlers/",
+				"/models/",
+				"/views/",
+				"/layouts/",
+				"/config/",
+				"/interceptors/",
+				"/modules_app/"
+			],
 			/* session adds the session id so repeat alerts from one visitor can be
 			 * tied together. Off by default: a live session id in an email is
 			 * enough to impersonate that visitor. */
@@ -85,8 +104,9 @@ component {
 			userProvider         : "",
 			// Shorten file paths in the origin and stack frames by removing the
 			// application root, so a path reads "/handlers/Main.cfc". Set false to
-			// keep the full absolute path.
-			relativePaths        : false,
+			// keep the full absolute path. Paths outside the application root are
+			// always shown in full either way.
+			relativePaths        : true,
 			/* Include the bound parameter values from a failed query. Best field
 			 * for reproducing a database error, but it prints whatever a visitor
 			 * typed, and maskKeys cannot filter it because the values carry no

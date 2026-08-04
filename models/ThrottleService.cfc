@@ -87,8 +87,14 @@ component singleton accessors="true" {
 					suppressedCount : 0,
 					firstSeen       : now(),
 					lastSeen        : now(),
-					lastEvent       : arguments.snapshot
+					lastEvent       : arguments.snapshot,
+					// Distinct routes and client addresses seen this window,
+					// capped at settings.digestSampleSize. The overflow flags
+					// say "there were more" once the cap is hit.
+					samples         : { route : [], client : [] },
+					overflow        : { route : false, client : false }
 				};
+				addSamples( variables.windows[ arguments.signature ], arguments.snapshot );
 				return result;
 			}
 
@@ -97,6 +103,7 @@ component singleton accessors="true" {
 			entry.totalCount++;
 			entry.lastSeen    = now();
 			entry.lastEvent   = arguments.snapshot;
+			addSamples( entry, arguments.snapshot );
 			result.occurrence = entry.totalCount;
 			if ( entry.sentCount < settings.throttle.maxPerWindow ) {
 				entry.sentCount++;
@@ -199,6 +206,40 @@ component singleton accessors="true" {
 	}
 
 	/**
+	 * addSamples
+	 *
+	 * Adds the snapshot's route and client to the window's distinct-value
+	 * sample sets. A value is skipped when blank or already sampled. Once a
+	 * set holds settings.digestSampleSize values, new distinct values only set
+	 * the overflow flag - the sets sit in a long-lived window entry and must
+	 * not grow with traffic. Runs while record() holds the lock.
+	 *
+	 * @entry    The window entry being updated.
+	 * @snapshot The occurrence snapshot from CaptureService.
+	 */
+	private void function addSamples( required struct entry, required struct snapshot ){
+		var capacity = settings.keyExists( "digestSampleSize" ) ? settings.digestSampleSize : 0;
+		if ( !capacity ) {
+			return;
+		}
+
+		for ( var key in [ "route", "client" ] ) {
+			if ( !arguments.snapshot.keyExists( key ) || !isSimpleValue( arguments.snapshot[ key ] ) ) {
+				continue;
+			}
+			var value = toString( arguments.snapshot[ key ] ).trim();
+			if ( !value.len() || arrayFindNoCase( arguments.entry.samples[ key ], value ) ) {
+				continue;
+			}
+			if ( arguments.entry.samples[ key ].len() >= capacity ) {
+				arguments.entry.overflow[ key ] = true;
+				continue;
+			}
+			arguments.entry.samples[ key ].append( value );
+		}
+	}
+
+	/**
 	 * buildSeed
 	 *
 	 * Returns the expired window fields needed to build a digest.
@@ -217,7 +258,9 @@ component singleton accessors="true" {
 			suppressedCount : arguments.entry.suppressedCount,
 			firstSeen       : arguments.entry.firstSeen,
 			lastSeen        : arguments.entry.lastSeen,
-			windowSeconds   : settings.throttle.windowSeconds
+			windowSeconds   : settings.throttle.windowSeconds,
+			samples         : arguments.entry.keyExists( "samples" ) ? arguments.entry.samples : { route : [], client : [] },
+			overflow        : arguments.entry.keyExists( "overflow" ) ? arguments.entry.overflow : { route : false, client : false }
 		};
 	}
 

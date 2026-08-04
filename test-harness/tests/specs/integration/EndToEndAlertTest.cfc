@@ -21,6 +21,8 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].subject ).toInclude( "ERROR" );
 				expect( mailbox[ 1 ].body ).toInclude( "e2e boom" );
 				expect( mailbox[ 1 ].body ).notToInclude( "<style" );
+				expect( mailbox[ 1 ].body ).toInclude( "url", "the request section carries the copyable URL row" );
+				expect( mailbox[ 1 ].body ).toInclude( "Runtime", "engine and framework versions are listed" );
 			} );
 
 			it( "sends the first 3 of a burst and suppresses the rest", function(){
@@ -66,6 +68,11 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				try {
 					settings.throttle.windowSeconds = 1;
 
+					// Give the request context an event so the digest's route
+					// sample has something to record. A bare test request has
+					// no routed URL and no current event.
+					getRequestContext().setValue( "event", "main.digestTest" );
+
 					var logger = getController().getLogBox().getLogger( "integrationTest" );
 					for ( var i = 1; i <= 5; i++ ) {
 						logger.error( "digest boom" );
@@ -81,6 +88,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 					expect( mailbox[ 4 ].subject ).toInclude( "2 more times" );
 					expect( mailbox[ 4 ].body ).toInclude( "Total occurrences" );
 					expect( mailbox[ 4 ].body ).toInclude( "1 second", "a sub-minute window must not read as 0 minutes" );
+					expect( mailbox[ 4 ].body ).toInclude( "Routes", "the digest samples the routes seen in the window" );
 				} finally {
 					settings.throttle.windowSeconds = original;
 				}

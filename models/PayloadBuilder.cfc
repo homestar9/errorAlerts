@@ -7,8 +7,9 @@
 component singleton accessors="true" {
 
 	// WireBox injects these dependencies.
-	property name="settings" inject="coldbox:moduleSettings:errorAlerts";
-	property name="coldbox"  inject="coldbox";
+	property name="settings"        inject="coldbox:moduleSettings:errorAlerts";
+	property name="coldbox"         inject="coldbox";
+	property name="frameClassifier" inject="FrameClassifier@errorAlerts";
 
 	/**
 	 * init
@@ -21,6 +22,11 @@ component singleton accessors="true" {
 	 */
 	function init(){
 		variables.logLevels = new coldbox.system.logging.LogLevels();
+
+		/* How many raw stack frames to inspect when looking for the application
+		 * caller. A runaway recursive stack can hold thousands of frames, and
+		 * scanning them all on every alert would be wasted work. */
+		variables.MAX_SCAN_FRAMES = 100;
 
 		// The directory holding this file, e.g. ".../errorAlerts/models/".
 		var modelsPath           = getDirectoryFromPath( getCurrentTemplatePath() ).replace( "\", "/", "all" );
@@ -61,6 +67,7 @@ component singleton accessors="true" {
 			windowSeconds : settings.throttle.windowSeconds,
 			exception     : exception,
 			request       : buildRequest( exception ),
+			runtime       : runtimeInfo(),
 			rc            : {},
 			requestBody   : "",
 			extraInfo     : ""
@@ -90,7 +97,7 @@ component singleton accessors="true" {
 	 * @seed The digest seed from ThrottleService.
 	 */
 	struct function buildDigest( required struct seed ){
-		return {
+		var digest = {
 			type            : "digest",
 			severity        : levelName( arguments.seed.severity ),
 			signature       : arguments.seed.signature,
@@ -109,6 +116,17 @@ component singleton accessors="true" {
 			machine         : machineName(),
 			moduleVersion   : moduleVersion()
 		};
+
+		// Distinct routes and client addresses ThrottleService sampled during
+		// the window. Guarded so an older seed shape still builds.
+		if ( arguments.seed.keyExists( "samples" ) ) {
+			digest.samples = arguments.seed.samples;
+		}
+		if ( arguments.seed.keyExists( "overflow" ) ) {
+			digest.overflow = arguments.seed.overflow;
+		}
+
+		return digest;
 	}
 
 	/**
@@ -174,23 +192,37 @@ component singleton accessors="true" {
 			}
 
 			var exception = {
-				type         : structKeyExists( arguments.extraInfo, "type" ) ? toString( arguments.extraInfo.type ) : "",
-				message      : structKeyExists( arguments.extraInfo, "message" ) ? toString( arguments.extraInfo.message ) : "",
-				detail       : structKeyExists( arguments.extraInfo, "detail" ) ? toString( arguments.extraInfo.detail ) : "",
-				errorCode    : firstOf( arguments.extraInfo, [ "errorCode", "errNumber" ] ),
-				extendedInfo : firstOf( arguments.extraInfo, [ "extendedInfo" ] ),
-				database     : buildDatabaseDetail( arguments.extraInfo ),
-				causes       : buildCauses( arguments.extraInfo ),
-				snippet      : buildSnippet( arguments.extraInfo ),
-				tagContext   : []
+				type            : structKeyExists( arguments.extraInfo, "type" ) ? toString( arguments.extraInfo.type ) : "",
+				message         : structKeyExists( arguments.extraInfo, "message" ) ? toString( arguments.extraInfo.message ) : "",
+				detail          : structKeyExists( arguments.extraInfo, "detail" ) ? toString( arguments.extraInfo.detail ) : "",
+				errorCode       : firstOf( arguments.extraInfo, [ "errorCode", "errNumber" ] ),
+				extendedInfo    : firstOf( arguments.extraInfo, [ "extendedInfo" ] ),
+				database        : buildDatabaseDetail( arguments.extraInfo ),
+				causes          : buildCauses( arguments.extraInfo ),
+				snippet         : buildSnippet( arguments.extraInfo ),
+				callerSnippet   : { template : "", line : 0, lines : [] },
+				tagContext      : [],
+				totalFrames     : 0,
+				omittedFrames   : 0,
+				actionableFrame : {}
 			};
 
 			if (
 				structKeyExists( arguments.extraInfo, "tagContext" )
 				&& isArray( arguments.extraInfo.tagContext )
 			) {
-				var frames = arguments.extraInfo.tagContext;
-				for ( var i = 1; i <= frames.len(); i++ ) {
+				var frames            = arguments.extraInfo.tagContext;
+				exception.totalFrames = frames.len();
+
+				/* Find the first frame that belongs to the application itself.
+				 * A database or ORM failure can bury the application's own code
+				 * far below framework frames, past the display cut-off. */
+				var actionable = frameClassifier.findFirstApplicationFrame( frames, variables.MAX_SCAN_FRAMES );
+
+				var scanLimit = min( frames.len(), variables.MAX_SCAN_FRAMES );
+				var lastKept  = 0;
+
+				for ( var i = 1; i <= scanLimit; i++ ) {
 					if ( exception.tagContext.len() >= settings.stackFrames ) {
 						break;
 					}
@@ -210,11 +242,34 @@ component singleton accessors="true" {
 						continue;
 					}
 
-					exception.tagContext.append( {
-						template : template.len() ? relativeTemplate( template ) : "",
-						line     : structKeyExists( frames[ i ], "line" ) ? frames[ i ].line : 0
-					} );
+					exception.tagContext.append( frameStruct( frames[ i ], i, template ) );
+					lastKept = i;
 				}
+
+				/* When the application's own frame fell past the display cut-off,
+				 * append it as one extra pinned frame so the email always shows
+				 * which line of application code triggered the error. */
+				if ( !actionable.isEmpty() ) {
+					exception.actionableFrame = {
+						index    : actionable.index,
+						template : relativeTemplate( actionable.template ),
+						line     : actionable.line
+					};
+
+					if ( actionable.index > lastKept ) {
+						exception.tagContext.append(
+							frameStruct( frames[ actionable.index ], actionable.index, actionable.template )
+						);
+					}
+
+					// Second source excerpt: the application line that made the
+					// call, next to the throw site the first snippet shows.
+					if ( settings.codeSnippetLines && actionable.index > 1 ) {
+						exception.callerSnippet = snippetFor( actionable.template, actionable.line );
+					}
+				}
+
+				exception.omittedFrames = max( 0, exception.totalFrames - exception.tagContext.len() );
 			}
 
 			return exception;
@@ -247,6 +302,37 @@ component singleton accessors="true" {
 			}
 		}
 		return "";
+	}
+
+	/**
+	 * frameStruct
+	 *
+	 * Returns one stack frame for the payload: display path, line, the raw
+	 * tagContext position, whether the frame is application code, and the
+	 * function name when the engine supplies one. Engines spell the function
+	 * key differently, and Lucee fills `id` with "??" when it has no name.
+	 *
+	 * @frame    The raw tagContext frame struct.
+	 * @index    The frame's position in the raw tagContext array.
+	 * @template The frame's template path, already extracted by the caller.
+	 */
+	private struct function frameStruct(
+		required any frame,
+		required numeric index,
+		required string template
+	){
+		var fn = firstOf( arguments.frame, [ "function", "functionName", "id" ] );
+		if ( fn == "??" ) {
+			fn = "";
+		}
+
+		return {
+			template    : arguments.template.len() ? relativeTemplate( arguments.template ) : "",
+			line        : structKeyExists( arguments.frame, "line" ) ? arguments.frame.line : 0,
+			index       : arguments.index,
+			application : arguments.template.len() ? frameClassifier.isApplicationFrame( arguments.template ) : false,
+			fn          : fn
+		};
 	}
 
 	/**
@@ -338,13 +424,37 @@ component singleton accessors="true" {
 			var template = structKeyExists( frame, "template" ) ? frame.template : "";
 			var line     = structKeyExists( frame, "line" ) ? val( frame.line ) : 0;
 
-			if ( !template.len() || line <= 0 || !fileExists( template ) ) {
+			return snippetFor( template, line );
+		} catch ( any e ) {
+		}
+
+		return snippet;
+	}
+
+	/**
+	 * snippetFor
+	 *
+	 * Reads the source lines around one file position. Shared by the throw-site
+	 * snippet and the application-caller snippet, so both apply the same
+	 * file-existence check and readLines() limits.
+	 *
+	 * Returns the empty snippet shape when the file is gone (a compiled or
+	 * archived template) or cannot be read.
+	 *
+	 * @template Absolute path of the file to read.
+	 * @line     The line to center the excerpt on.
+	 */
+	private struct function snippetFor( required string template, required numeric line ){
+		var snippet = { template : "", line : 0, lines : [] };
+
+		try {
+			if ( !arguments.template.len() || arguments.line <= 0 || !fileExists( arguments.template ) ) {
 				return snippet;
 			}
 
-			snippet.template = relativeTemplate( template );
-			snippet.line     = line;
-			snippet.lines    = readLines( template, line );
+			snippet.template = relativeTemplate( arguments.template );
+			snippet.line     = arguments.line;
+			snippet.lines    = readLines( arguments.template, arguments.line );
 		} catch ( any e ) {
 		}
 
@@ -474,6 +584,10 @@ component singleton accessors="true" {
 
 		addValue( info, "origin", buildOrigin( arguments.exception ) );
 
+		// A copy-paste line for reproducing the request, e.g.
+		// "GET https://example.com/posts/hello?page=2". Empty outside a web request.
+		addValue( info, "url", requestUrl() );
+
 		// Only when the application configured a userProvider closure.
 		if ( !isSimpleValue( settings.userProvider ) ) {
 			addValue( info, "user", buildUser() );
@@ -524,6 +638,9 @@ component singleton accessors="true" {
 		addValue( info, "machine", machineName() );
 		addValue( info, "context", executionContext() );
 		addValue( info, "memory", memoryUsage() );
+		// How long the request had been running when it failed. "40 ms in" and
+		// "900 ms in" point at very different problems.
+		addValue( info, "elapsed", elapsedMs() );
 
 		if ( settings.includeScopes.keyExists( "session" ) && settings.includeScopes.session ) {
 			addValue( info, "sessionId", sessionIdentifier() );
@@ -711,6 +828,112 @@ component singleton accessors="true" {
 		} catch ( any e ) {
 			return "";
 		}
+	}
+
+	/**
+	 * elapsedMs
+	 *
+	 * Reports how many milliseconds this request had been running when the
+	 * error happened, e.g. "412 ms". Lucee and BoxLang expose the request
+	 * start on the page context; Adobe does not, so the row is empty there.
+	 * Never reads anything that needs admin credentials.
+	 */
+	private string function elapsedMs(){
+		try {
+			var start = getPageContext().getStartTime();
+			if ( isNumeric( start ) && start > 0 ) {
+				return "#max( 0, getTickCount() - start )# ms";
+			}
+		} catch ( any e ) {
+		}
+		return "";
+	}
+
+	/**
+	 * requestUrl
+	 *
+	 * Returns one copyable line for reproducing the request:
+	 * "GET https://example.com/posts/hello?page=2". The query string passes
+	 * through queryStringValue(), so maskQueryString applies. The scheme
+	 * prefers the X-Forwarded-Proto header because behind a proxy cgi.https
+	 * reports the proxy hop, not what the client used.
+	 *
+	 * Returns an empty string outside a web request.
+	 */
+	private string function requestUrl(){
+		try {
+			var method = cgi.request_method.trim();
+			var host   = cgi.http_host.trim();
+			if ( !method.len() || !host.len() ) {
+				return "";
+			}
+
+			var scheme = cgi.http_x_forwarded_proto.trim().len()
+			 ? cgi.http_x_forwarded_proto.trim()
+			 : ( cgi.https.trim().lcase() == "on" ? "https" : "http" );
+			var path = cgi.path_info.trim().len() ? cgi.path_info : cgi.script_name;
+			var qs   = queryStringValue();
+
+			return "#method.ucase()# #scheme#://#host##path##( qs.len() ? "?" & qs : "" )#";
+		} catch ( any e ) {
+			return "";
+		}
+	}
+
+	/**
+	 * runtimeInfo
+	 *
+	 * Returns the CFML engine, Java, ColdBox, and errorAlerts versions for the
+	 * email's Runtime section. An error that only happens on one engine or
+	 * after an upgrade is invisible without these. Cached because none of them
+	 * change while the application is running.
+	 *
+	 * BoxLang and Lucee both define server.coldfusion for compatibility, so
+	 * their own keys are checked first. Keys without a readable value are left
+	 * out rather than shown blank.
+	 */
+	private struct function runtimeInfo(){
+		if ( variables.keyExists( "cachedRuntimeInfo" ) ) {
+			return variables.cachedRuntimeInfo;
+		}
+
+		var info = structNew( "ordered" );
+
+		try {
+			if ( server.keyExists( "boxlang" ) ) {
+				info[ "engine" ] = "BoxLang #server.boxlang.version#";
+			} else if ( server.keyExists( "lucee" ) ) {
+				info[ "engine" ] = "Lucee #server.lucee.version#";
+			} else if ( server.keyExists( "coldfusion" ) ) {
+				info[ "engine" ] = "#server.coldfusion.productName# #server.coldfusion.productVersion#";
+			}
+		} catch ( any e ) {
+		}
+
+		try {
+			info[ "java" ] = server.java.version;
+		} catch ( any e ) {
+			try {
+				info[ "java" ] = createObject( "java", "java.lang.System" ).getProperty( "java.version" );
+			} catch ( any inner ) {
+			}
+		}
+
+		try {
+			var coldboxVersion = coldbox.getColdBoxSetting( "version" );
+			if ( isSimpleValue( coldboxVersion ) && coldboxVersion.len() ) {
+				info[ "coldbox" ] = coldboxVersion;
+			}
+		} catch ( any e ) {
+		}
+
+		var ownVersion = moduleVersion();
+		if ( ownVersion.len() ) {
+			info[ "errorAlerts" ] = ownVersion;
+		}
+
+		variables.cachedRuntimeInfo = info;
+		return info;
 	}
 
 	/**
