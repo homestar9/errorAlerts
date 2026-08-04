@@ -56,12 +56,47 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - Avoid em-dashes in prose unless they genuinely aid clarity.
 - Do not run `cfformat` on the repo. 
 
-## Communication
+## Writing style for Code Comments and Responses
 
-**Write ALL comments, plans, and explanations suitable for a beginner developer**. Prefer clear, plain language over dense jargon. Briefly explain non-obvious framework behavior, conventions, or architectural decisions. Keep explanations practical, concise, and easy to scan. Challenge the user if you think he is going down the wrong path, introducing unnecessary complexity, or making a decision that will make future maintenance harder. Never use the following words:
+Use clear, literal, plain English. **Optimize for immediate understanding, not cleverness or brevity.**
 
-- gates
-- tripwire
-- footgun
+Follow these rules:
+
+- Write for an 8th grade reading level.
+- Lead with the direct answer or conclusion.
+- Explain the reasoning in a logical order.
+- Use one main idea per sentence.
+- Use technical terminology when it is the clearest term, but explain unfamiliar or project-specific terms.
+- Use concrete descriptions instead of metaphors, idioms, or conversational shorthand.
+- Do not assume that shorter writing is clearer writing.
+- Do not use the following phrases:
+  - "dead input,"
+  - "survives,"
+  - "the machinery,"
+  - "wires up,"
+  - "drives,"
+  - "gates,"
+  - "surfaces"
+  - "holding pen"
+  - "graduate"
+  - "remounts"
+- Favor literal language that explains behavior more clearly.
+ 
+Before sending an explanation, reread it and ask:
+
+1. Would a developer unfamiliar with this codebase understand every sentence on the first reading?
+2. Does every pronoun have an obvious referent?
+3. Did I skip any reasoning needed to connect the evidence to the conclusion?
+4. Did I use a clever phrase where a literal explanation would be clearer?
+
+If any answer is no, rewrite the response before sending it.
+
+## Use the Right Subagent For the Job
+
+When delegating work to sub-agents, use the least expensive model that can complete each task reliably. Use lightweight models for mechanical work such as locating files, reading straightforward code, gathering facts, or running simple checks. Use robust reasoning models for architecture, complex debugging, security review, open-ended exploration, creative work, or tasks requiring judgment. When complexity or risk is uncertain, favor the stronger model, and escalate if a lightweight agent encounters ambiguity.
 
 If something the user says is unclear, ask the user questions until you have a solid understanding.
+
+## Releasing
+
+This module uses a specific release methodology. See [RELEASE.md](RELEASE.md) for details. Do not bump versions or release unless explicitly asked to do so.
