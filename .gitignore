@@ -24,3 +24,6 @@ Thumbs.db
 # These patterns match file names rather than directories.
 .env
 *.bak
+
+# Developer notes
+plans/**
