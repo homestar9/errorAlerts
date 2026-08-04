@@ -100,9 +100,14 @@ run:
   because `EmailRenderer` caps the message section at 2048 characters first.
   `maxBodyBytes` only matters when many medium-sized sections add up.
 - Escaping, the `stackFrames` limit and signature normalization all behaved:
-  markup arrived as literal text, `/trigger/deepStack` listed exactly 10 frames
-  out of 25, and `/trigger/burstVariants` collapsed 10 messages that differed
-  only by numbers and UUIDs into a single throttle window.
+  markup arrived as literal text, and `/trigger/burstVariants` collapsed 10
+  messages that differed only by numbers and UUIDs into a single throttle window.
+- **The stack list can hold one more frame than `stackFrames` allows.**
+  `/trigger/deepStack` shows 11 frames out of 25: the ten the `stackFrames` cap
+  permits, plus the first application-owned frame pinned on the end so the email
+  always names the line of your own code that triggered the error. Rows reading
+  `... N frames omitted` and `... N more frames not shown` mark where the list was
+  shortened, so it never looks complete when it is not.
 
 ## Adding a scenario
 

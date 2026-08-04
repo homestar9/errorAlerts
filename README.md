@@ -69,7 +69,9 @@ function testError( event, rc, prc ){
 }
 ```
 
-Visit the action in your browser. You should receive an email containing the error message, exception details, the source lines around the failing line, the route, stack frames, and a sanitized copy of the request collection.
+Visit the action in your browser. You should receive an email containing the error message, exception details, the source lines around the failing line, the route, a copyable request URL, stack frames, engine and framework versions, and a sanitized copy of the request collection.
+
+When an error is thrown deep inside framework or ORM code, the email also pins the first stack frame that belongs to your own application - your handler, model, or view - and shows a second source snippet at that line, labeled "Application caller". Rows such as "... 5 frames omitted" mark where the stack list is shortened.
 
 Remove the test action after confirming delivery.
 
@@ -114,7 +116,9 @@ Passing the caught exception as `extraInfo` lets the alert include its type, det
 
 ## How throttling works
 
-Errors are grouped using their LogBox category, message, and top stack frame. Numbers and UUIDs in messages are normalized by default, so messages such as `Order 123 failed` and `Order 456 failed` are treated as the same error.
+Errors are grouped using four things: their LogBox category, the first 200 characters of the message, the top stack frame, and the first stack frame that belongs to your own application. Numbers and UUIDs in messages are normalized by default, so messages such as `Order 123 failed` and `Order 456 failed` are treated as the same error.
+
+The application frame matters most for database errors. Their top frame is always the same framework file, so without the application frame two unrelated failing queries would differ only by message text and would share one throttle window. Which folders count as application code is controlled by `applicationFramePrefixes`.
 
 With the defaults, if the same error occurs five times within ten minutes:
 
@@ -298,11 +302,13 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `normalizeSignatures` | `true` | Replaces digit runs and UUIDs before errors are grouped. |
 | `maxBodyBytes` | `102400` | Maximum rendered email size. Lower-priority sections are removed first. |
 | `rcValueMaxLength` | `200` | Maximum rendered length of each request-collection value. |
-| `stackFrames` | `10` | Maximum stack frames shown in an alert. Frames whose template is not a file path, such as JDBC driver internals, are skipped after the first frame. |
+| `stackFrames` | `10` | Maximum stack frames shown in an alert. Frames whose template is not a file path, such as JDBC driver internals, are skipped after the first frame. When the first application-owned frame falls past this cap, it is appended as one extra pinned frame. |
+| `applicationFramePrefixes` | Conventional ColdBox folders | Path prefixes, relative to the application root, that mark a stack frame as application code. Defaults to `/handlers/`, `/models/`, `/views/`, `/layouts/`, `/config/`, `/interceptors/`, and `/modules_app/`. `/modules/` is deliberately excluded because installed dependencies live there. Override for a non-conventional source layout. |
+| `digestSampleSize` | `5` | Distinct routes and client IPs a digest email lists from the occurrences in one throttle window. Values past the cap are reported as "at least N distinct". `0` turns sampling off. The client IP row puts visitor IP addresses in the email, and its value is read from the `X-Forwarded-For` request header when present, which the caller controls. Treat it as a diagnostic hint, not as proof of who sent the request. |
 | `includeScopes` | `{ rc: true, cgi: true, extraInfo: true, session: false }` | Controls which diagnostic sections are included. `session` adds a `sessionId` row so alerts from one visitor can be tied together. |
 | `codeSnippetLines` | `5` | Source lines shown either side of the failing line, with the failing line highlighted. `0` turns the snippet off. Costs one file read per alert and puts application source in the email. |
 | `userProvider` | `""` | A closure that receives WireBox and returns a display string for the signed-in user. See the recipe below. The `user` row only appears when this is set. |
-| `relativePaths` | `false` | When `true`, trims the application root from file paths so a path reads `/handlers/Main.cfc`. |
+| `relativePaths` | `true` | Trims the application root from file paths so a path reads `/handlers/Main.cfc`. Paths outside the application root are always shown in full. Set `false` to keep every path absolute. |
 | `includeQueryParams` | `true` | Include the bound parameter values from a failed query. The best data for reproducing a database error, but the values can contain whatever a visitor typed, and `maskKeys` cannot filter them because they carry no field names. |
 | `maskQueryString` | `true` | Apply `maskKeys` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
 | `emptyValueText` | `"N/A"` | Placeholder shown for a request value the request did not provide. |
@@ -312,6 +318,13 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `maskKeys` | Password/token-related names | Request keys and query-string fields whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. |
 
 The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Matching is an exact, case-insensitive comparison: `password` does **not** cover `newPassword` or `passwordConfirm`. Check the real field names your forms post and list every variant before using alerts in production.
+
+### Upgrading to 2.3
+
+Two behavior changes to know about:
+
+- Error signatures now include the first application-owned stack frame, so two different call sites that fail with the same message are throttled separately. Every signature changes once on upgrade, which restarts any open throttle window. No action is needed; a burst in progress during the deploy may send up to `maxPerWindow` extra emails.
+- `relativePaths` now defaults to `true`, so file paths inside the application root render as `/handlers/Main.cfc` instead of the full absolute path. Set it back to `false` to keep absolute paths.
 
 ### Upgrading from 2.0
 

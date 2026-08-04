@@ -36,8 +36,10 @@ the whole default list.
 | `box run-script release:check` | Reports whether the project is ready to release. Changes nothing. |
 | `box run-script release:dryrun` | Full rehearsal. Publishes, tags, and pushes nothing. |
 | `box run-script release` | The release: check, sync, test, build, publish, tag, GitHub Release. |
-| `box run-script release:hotfix` | The release, skipping the test suite. |
-| `box run-script test:engines` | Runs the suite on every engine in turn. |
+| `box run-script release:skip-tests` | The release, skipping the test suite. |
+| `box run-script release:hotfix` | The same as `release:skip-tests`, kept as an alias. |
+| `box run-script release:existing-tag` | Publishes a version whose tag already exists at HEAD, instead of creating the tag. |
+| `box run-script test:engines` | Runs the suite on every engine in turn. It runs every engine even after one fails, then prints a pass or fail line for each and exits non-zero if any failed. |
 | `box run-script bump:patch` | Raises the version and dates the changelog. Also `bump:minor`, `bump:major`. |
 | `box run-script bump:beta` | Starts a prerelease of the next minor version. Also `bump:alpha`. |
 | `box run-script bump:prerelease` | Steps an existing prerelease forward, `beta.3` to `beta.4`. |

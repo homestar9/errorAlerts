@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-04
+
+### Changed
+
+- Error signatures now include the first application-owned stack frame, so two
+  call sites that fail with the same message throttle separately. Before this,
+  every database error hashed the same framework grammar frame and unrelated
+  failing queries only differed by message text. Every signature changes once
+  on upgrade, which restarts any open throttle window; a burst in progress
+  during the deploy may send up to `maxPerWindow` extra emails.
+- `relativePaths` now defaults to `true`: paths inside the application root
+  render as `/handlers/Main.cfc` instead of the full absolute path. Paths
+  outside the root are still shown in full. Set the flag back to `false` for
+  absolute paths.
+
+### Added
+
+- The email pins the first stack frame that belongs to the application itself
+  (handler, model, view), even when it sits past the `stackFrames` display cap,
+  and highlights it in the frame list. Which folders count as application code
+  is configurable with `applicationFramePrefixes`.
+- A second source snippet, "Application caller", showing the application line
+  that asked for the failing work, next to the existing throw-site snippet.
+- Rows such as "... 5 frames omitted" and "... 3 more frames not shown" mark
+  where the stack list is shortened. Previously the list stopped silently at
+  ten frames and looked complete.
+- Stack frames keep the function name when the engine supplies one.
+- A copyable `url` row in the Request section, e.g.
+  `GET https://example.com/posts/hello?page=2`, with `maskKeys` applied to the
+  query string.
+- A Runtime section listing the CFML engine, Java, ColdBox, and errorAlerts
+  versions.
+- An `elapsed` row showing how long the request had been running when it
+  failed, on engines that expose the request start time (Lucee, BoxLang).
+- Digest emails list the distinct routes and client IPs seen during the
+  throttle window - "3 distinct routes from 1 client IP" identifies a crawler
+  at a glance. Capped by the new `digestSampleSize` setting; `0` disables it.
+  The client IP row reads the `X-Forwarded-For` header when the request sends
+  one, so treat its value as a diagnostic hint rather than proof of origin.
+
+### Internal
+
+These change how the project is built and released. They do not ship in the
+published package.
+
+- The release task can publish a version whose tag already exists at HEAD,
+  through the new `release:existing-tag` script. This is what a tag-triggered
+  CI job needs, since the tag is created before the job runs.
+- `release:hotfix` is now also available under the clearer name
+  `release:skip-tests`. Both names still work.
+- `test:engines` runs every engine even after one fails, then prints a pass or
+  fail line for each. It used to stop at the first failure, which hid whether
+  the others would have passed.
+- The release no longer runs `git checkout -f` before pulling. It uses
+  `git pull --ff-only`, so uncommitted work can no longer be discarded by
+  starting a release.
+
 ## [2.2.0] - 2026-07-28
 
 - Added a project logo
