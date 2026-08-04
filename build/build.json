@@ -9,7 +9,27 @@
         "forgebox":true,
         "github":true
     },
-    "excludesAdd":[
+    "excludes":[
+        "^build$",
+        "^modules$",
+        "^node_modules$",
+        "^resources$",
+        "^test-harness$",
+        "^tests$",
+        "^test-results$",
+        "^temp$",
+        "^plans$",
+        "^(package|package-lock)\\.json$",
+        "^(webpack|vite|vitest)\\.config\\.js$",
+        "^docker-compose\\.yml$",
+        "^server(?:-.*)?\\.json$",
+        "^.*\\.code-workspace$",
+        "^(AGENTS|CLAUDE|DEVNOTES|RELEASE)\\.md$",
+        "\\.bak$",
+        "\\.(zip|tar|tar\\.gz|tgz|7z|rar)$",
+        "^\\..*"
+    ],
+    "excludesAdd": [
         "^[\\/]?errorAlerts-logo\\.avif$"
     ],
     "engines":[

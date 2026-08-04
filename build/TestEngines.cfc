@@ -11,8 +11,11 @@
  * one engine, wait for it to answer, run the suite, stop it, move to the next. Expect it to
  * take a while. The first run of an engine also downloads it, which takes longer still.
  *
- * List your engines in build/build.json. Put the ones you trust first: the run stops at the
- * first failure, so a problem with a rarely used engine still leaves you results for the rest.
+ * Every engine gets its turn even when an earlier one fails, so one broken engine never hides
+ * the others. The end of the run prints a line per engine, and the task still exits with an
+ * error if any of them failed.
+ *
+ * List your engines in build/build.json.
  */
 component {
 
@@ -30,8 +33,9 @@ component {
 	/**
 	 * run
 	 *
-	 * Runs the suite on each engine in turn. Stops at the first failure, naming the engine that
-	 * failed and listing what already passed. Leaves every server stopped either way.
+	 * Runs the suite on each engine in turn. Every engine gets its turn even when an earlier one
+	 * fails. Prints a line per engine at the end and errors out if any of them failed, so a
+	 * failure still stops CI and the release. Leaves every server stopped either way.
 	 */
 	function run(){
 		if ( !arrayLen( variables.s.engines ) ) {
@@ -44,13 +48,13 @@ component {
 					']',
 					"",
 					"Each configFile is a server json file in your project root.",
-					"Put the engines you trust first: the run stops at the first failure."
+					"Every engine you list is run, in the order you list them."
 				],
 				"Add them to build/build.json like this"
 			);
 		}
 
-		var passed  = [];
+		var results = [];
 		var started = getTickCount();
 
 		// Only one server can hold the port, and we do not know which one is up.
@@ -61,8 +65,17 @@ component {
 			var engineStart = getTickCount();
 			print.line().boldBlueLine( "=== #engineName# (#engine.configFile#) ===" ).toConsole();
 
-			startEngine( engine, engineName, passed );
-			warmUp( engine, engineName, passed );
+			var startResult = startEngine( engine, engineName );
+			if ( !startResult.ok ) {
+				results.append( recordFailure( engineName, engineStart, startResult.reason ) );
+				continue;
+			}
+
+			var warmUpResult = warmUp( engine, engineName );
+			if ( !warmUpResult.ok ) {
+				results.append( recordFailure( engineName, engineStart, warmUpResult.reason ) );
+				continue;
+			}
 
 			print.blueLine( "Running the suite on #engineName#..." ).toConsole();
 			var suiteFailed = false;
@@ -78,19 +91,21 @@ component {
 			stopEngine( engine.configFile );
 
 			if ( suiteFailed ) {
-				return failSweep( "The suite FAILED on #engineName#.", passed );
+				results.append( recordFailure( engineName, engineStart, "the suite failed" ) );
+				continue;
 			}
 
 			var minutes = numberFormat( ( getTickCount() - engineStart ) / 60000, "0.9" );
-			passed.append( "#engineName# (#minutes# min)" );
+			results.append( {
+				"name"    : engineName,
+				"passed"  : true,
+				"minutes" : minutes,
+				"reason"  : ""
+			} );
 			print.boldGreenLine( "#engineName#: passed in #minutes# min." ).toConsole();
 		}
 
-		var totalMinutes = numberFormat( ( getTickCount() - started ) / 60000, "0.9" );
-		print
-			.line()
-			.boldGreenLine( "All engines passed in #totalMinutes# min: #passed.toList( ', ' )#" )
-			.toConsole();
+		return report( results, started );
 	}
 
 	/********************************************* PRIVATE HELPERS *********************************************/
@@ -98,13 +113,13 @@ component {
 	/**
 	 * startEngine
 	 *
-	 * Starts one engine's server and stops the run if the start itself fails.
+	 * Starts one engine's server. Returns { ok, reason } rather than stopping the run, so the
+	 * sweep can record the failure and move on to the next engine.
 	 *
 	 * @engine     The engine entry from build.json.
 	 * @engineName The name to show.
-	 * @passed     What already passed, for the failure summary.
 	 */
-	private function startEngine( required struct engine, required string engineName, required array passed ){
+	private struct function startEngine( required struct engine, required string engineName ){
 		// Make sure the port is actually free first. Stopping a server returns before the old
 		// process lets go of the port, and starting the next one then fails for a reason that
 		// has nothing to do with the engine.
@@ -133,12 +148,16 @@ component {
 				.yellowLine( "  box server start serverConfigFile=#arguments.engine.configFile#" )
 				.line()
 				.toConsole();
-			failSweep(
-				"#arguments.engineName# would not start."
-				& ( len( startError ) ? " " & startError : "" ),
-				arguments.passed
-			);
+			// The start may have got far enough to hold the port. Clear it, or the next
+			// engine in the sweep fails for a reason that has nothing to do with it.
+			stopEngine( arguments.engine.configFile );
+			return {
+				"ok"     : false,
+				"reason" : "would not start" & ( len( startError ) ? ": " & startError : "" )
+			};
 		}
+
+		return { "ok" : true, "reason" : "" };
 	}
 
 	/**
@@ -184,14 +203,13 @@ component {
 	 * warmUp
 	 *
 	 * Waits until the site answers, so the suite never runs against a server that is still
-	 * starting up. A half-started app produces failures that look real but are not. Stops the
-	 * run when the wait runs out.
+	 * starting up. A half-started app produces failures that look real but are not. Returns
+	 * { ok, reason } so the sweep can record the failure and move on to the next engine.
 	 *
 	 * @engine     The engine entry from build.json.
 	 * @engineName The name to show.
-	 * @passed     What already passed, for the failure summary.
 	 */
-	private function warmUp( required struct engine, required string engineName, required array passed ){
+	private struct function warmUp( required struct engine, required string engineName ){
 		var attempts = variables.s.warmup.attempts;
 		var delay    = variables.s.warmup.delaySeconds;
 		var probeUrl = variables.config.probeUrl();
@@ -216,17 +234,22 @@ component {
 			// Anything in the 200s or 300s means the site answered.
 			if ( lastStatus >= 200 && lastStatus < 400 ) {
 				print.greenLine( "#arguments.engineName# is up (status #lastStatus#)." ).toConsole();
-				return;
+				return { "ok" : true, "reason" : "" };
 			}
 			sleep( delay * 1000 );
 		}
 
 		stopEngine( arguments.engine.configFile );
-		failSweep(
-			"#arguments.engineName# never answered (last status: #lastStatus#). "
-			& "A repeating 500 usually means the app will not start on this engine. Start it by hand and read the log.",
-			arguments.passed
-		);
+		print
+			.line()
+			.yellowLine(
+				"A repeating 500 usually means the app will not start on this engine. Start it by hand and read the log:"
+			)
+			.yellowLine( "  box server start serverConfigFile=#arguments.engine.configFile#" )
+			.line()
+			.toConsole();
+
+		return { "ok" : false, "reason" : "never answered (last status: #lastStatus#)" };
 	}
 
 	/**
@@ -259,19 +282,63 @@ component {
 	}
 
 	/**
-	 * failSweep
+	 * recordFailure
 	 *
-	 * Stops the run, saying what failed and what had already passed, so a long run that dies
-	 * near the end still tells you which engines were fine.
+	 * Builds the result entry for an engine that failed and prints the one-line reason.
 	 *
-	 * @message What failed.
-	 * @passed  The engines that already passed.
+	 * @engineName  The name to show.
+	 * @engineStart The tick count from when this engine's turn began.
+	 * @reason      Why it failed, in a few words.
 	 */
-	private function failSweep( required string message, required array passed ){
-		var summary = arguments.passed.len()
-			? "Already passed: #arguments.passed.toList( ', ' )#."
-			: "Nothing had passed yet.";
-		return error( arguments.message & " " & summary );
+	private struct function recordFailure( required string engineName, required numeric engineStart, required string reason ){
+		var minutes = numberFormat( ( getTickCount() - arguments.engineStart ) / 60000, "0.9" );
+		print.boldRedLine( "#arguments.engineName#: FAILED after #minutes# min -- #arguments.reason#" ).toConsole();
+		return {
+			"name"    : arguments.engineName,
+			"passed"  : false,
+			"minutes" : minutes,
+			"reason"  : arguments.reason
+		};
+	}
+
+	/**
+	 * report
+	 *
+	 * Prints a line per engine and ends the task. Errors out when any engine failed, so the
+	 * exit code still says the sweep was not clean.
+	 *
+	 * @results One entry per engine, in the order they ran.
+	 * @started The tick count from when the whole sweep began.
+	 */
+	private function report( required array results, required numeric started ){
+		var totalMinutes = numberFormat( ( getTickCount() - arguments.started ) / 60000, "0.9" );
+		var failed       = arguments.results.filter( function( result ){
+			return !result.passed;
+		} );
+
+		print.line().boldLine( "Results (#totalMinutes# min total):" ).toConsole();
+		for ( var result in arguments.results ) {
+			if ( result.passed ) {
+				print.greenLine( "  PASSED  #result.name# (#result.minutes# min)" ).toConsole();
+			} else {
+				print.redLine( "  FAILED  #result.name# (#result.minutes# min) -- #result.reason#" ).toConsole();
+			}
+		}
+		print.line().toConsole();
+
+		if ( !failed.len() ) {
+			print.boldGreenLine( "All #arguments.results.len()# engines passed." ).toConsole();
+			return;
+		}
+
+		var failedNames = failed.map( function( result ){
+			return result.name;
+		} );
+
+		return error(
+			"#failed.len()# of #arguments.results.len()# engines failed: "
+			& failedNames.toList( ", " ) & "."
+		);
 	}
 
 	/**

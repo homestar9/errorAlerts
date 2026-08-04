@@ -53,8 +53,8 @@ component {
 	 * @version     The version being built. Defaults to the box.json version.
 	 * @buildID     The build identifier. When blank, uses the short git commit hash.
 	 * @branch      The branch being built. When blank, reads the current branch.
-	 * @skipTests   Skip the test suite for this run only. Use for a hotfix you have already
-	 *              tested. It prints a warning, because an untested build is a real risk.
+	 * @skipTests   Skip the test suite for this run only. Use only when this version has already
+	 *              been tested. It prints a warning, because an untested build is a real risk.
 	 */
 	function run(
 		string projectName = "",

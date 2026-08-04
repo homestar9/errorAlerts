@@ -4,9 +4,9 @@
  * Run it with: box run-script release
  *
  * The order matters. Everything that could stop a release happens before anything permanent:
- * the checks run before the forced checkout that would throw away uncommitted work, and before
- * ForgeBox receives anything. Once a version is published it cannot be taken back, so every
- * failure after that point prints the exact commands to finish by hand.
+ * the checks run before the remote sync and before ForgeBox receives anything. Once a version
+ * is published it cannot be taken back, so every failure after that point prints the exact
+ * commands to finish by hand.
  *
  * Targets you can run on their own:
  *   run       Everything, in order. This is what box run-script release calls.
@@ -33,12 +33,20 @@ component {
 	 *
 	 * The whole release, in order.
 	 *
-	 * @version   The version to release. Defaults to the box.json version.
-	 * @dryRun    Do everything except publish, tag, and push. Prints what it would have run.
-	 *            Use this for your first release, or to test a change to the build.
-	 * @skipTests Skip the test suite. For a hotfix you have already tested.
+	 * @version     The version to release. Defaults to the box.json version.
+	 * @dryRun      Do everything except publish, tag, and push. Prints what it would have run.
+	 *              Use this for your first release, or to test a change to the build.
+	 * @skipTests   Skip the test suite. Use only when the current version has already been tested.
+	 * @existingTag Publish a tag that already exists and points at HEAD. Used by tag-triggered CI.
+	 * @buildID      Optional build identifier passed through to Build.cfc. CI uses its run number.
 	 */
-	function run( string version = "", boolean dryRun = false, boolean skipTests = false ){
+	function run(
+		string version      = "",
+		boolean dryRun      = false,
+		boolean skipTests   = false,
+		boolean existingTag = false,
+		string buildID      = ""
+	){
 		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
 		var tagName        = variables.s.tagPrefix & releaseVersion;
 
@@ -51,18 +59,24 @@ component {
 		}
 
 		// 1. Checks. These run first so nothing permanent has happened if one fails.
-		preflight( version = releaseVersion, dryRun = arguments.dryRun );
+		preflight(
+			version     = releaseVersion,
+			dryRun     = arguments.dryRun,
+			existingTag = arguments.existingTag
+		);
 
-		// 2. Line up with the remote, so only what is pushed gets released. This is skipped in
-		//    a dry run because the forced checkout throws away uncommitted work.
-		if ( variables.s.gitSync && !arguments.dryRun ) {
+		// 2. Line up a branch-based release with the remote. A dry run changes nothing, and a
+		//    tag-triggered release must build the immutable commit that is already checked out.
+		if ( variables.s.gitSync && !arguments.dryRun && !arguments.existingTag ) {
 			syncWithRemote();
+		} else if ( arguments.existingTag ) {
+			print.greenLine( "Using existing tag #tagName# at the checked-out commit; skipping branch sync." ).toConsole();
 		} else if ( variables.s.gitSync ) {
-			print.yellowLine( "Dry run: skipping git checkout and pull." ).toConsole();
+			print.yellowLine( "Dry run: skipping git pull." ).toConsole();
 		}
 
 		// 3. Build. The suite runs here and stops the release if anything fails.
-		runBuild( releaseVersion, arguments.skipTests );
+		runBuild( releaseVersion, arguments.skipTests, arguments.buildID );
 
 		// 4. Publish to ForgeBox, from the built folder rather than the project root.
 		if ( variables.s.publish.forgebox ) {
@@ -73,7 +87,11 @@ component {
 
 		// 5. Tag and create the GitHub Release.
 		if ( variables.s.publish.github ) {
-			github( version = releaseVersion, dryRun = arguments.dryRun );
+			github(
+				version     = releaseVersion,
+				dryRun     = arguments.dryRun,
+				existingTag = arguments.existingTag
+			);
 		} else {
 			print.yellowLine( "Skipping GitHub (publish.github is false in build.json)." ).toConsole();
 		}
@@ -95,10 +113,11 @@ component {
 	 * Everything that must be true before a release starts. Each check stops the run with a
 	 * plain explanation of how to fix it.
 	 *
-	 * @version The version being released.
-	 * @dryRun  Soften the checks that only matter for a real release.
+	 * @version     The version being released.
+	 * @dryRun      Soften the checks that only matter for a real release.
+	 * @existingTag Require the expected tag at HEAD instead of requiring an untagged release branch.
 	 */
-	function preflight( string version = "", boolean dryRun = false ){
+	function preflight( string version = "", boolean dryRun = false, boolean existingTag = false ){
 		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
 
 		print.boldBlueLine( "=== Checking ===" ).toConsole();
@@ -129,24 +148,71 @@ component {
 			}
 		}
 
-		// 3. Release only from the branch named in build.json.
+		// 3. A real branch-based release only runs from the production branch named in build.json.
+		//    A dry run may rehearse the release branch. Existing-tag mode accepts production or a
+		//    detached checkout (as used by tag-triggered CI), but not a tagged release branch.
 		var branch = variables.config.execNative( "git", [ "rev-parse", "--abbrev-ref", "HEAD" ] );
-		if ( trim( branch.output ) != variables.s.branch ) {
+		if ( branch.exitCode != 0 ) {
+			return error( "git could not identify the checked-out branch (#branch.output#)." );
+		}
+		var branchName = trim( branch.output );
+		if ( arguments.existingTag && branchName != variables.s.branch && branchName != "HEAD" ) {
 			return error(
-				"Releases come from the #variables.s.branch# branch, but you are on #trim( branch.output )#. "
+				"Existing-tag releases run from production branch #variables.s.branch# or a detached tag checkout, "
+				& "but you are on #branchName#."
+			);
+		} else if ( !arguments.existingTag && branchName != variables.s.branch && arguments.dryRun ) {
+			print
+				.boldYellowLine( "  warning  rehearsing from #branchName#, not production branch #variables.s.branch#" )
+				.yellowLine( "           A real release still has to run from #variables.s.branch#." )
+				.toConsole();
+		} else if ( !arguments.existingTag && branchName != variables.s.branch ) {
+			return error(
+				"Releases come from the production branch #variables.s.branch#, but you are on #branchName#. "
 				& "Switch branch, or change ""branch"" in build/build.json."
 			);
 		}
 
-		// 4. This version must not already be released. A missing tag exits non-zero, which is
-		//    the answer we want here.
-		var tagName  = variables.s.tagPrefix & releaseVersion;
-		var tagCheck = variables.config.execNative( "git", [ "rev-parse", "-q", "--verify", "refs/tags/" & tagName ] );
-		if ( tagCheck.exitCode == 0 ) {
-			return error(
-				"Tag #tagName# already exists, so #releaseVersion# has already been released. "
-				& "Raise the version first: box run-script bump:patch"
+		// 4. A branch-based release owns the tag, so it must be absent locally and remotely. A
+		//    tag-triggered release instead requires that exact tag to point at the checked-out
+		//    commit. rev-list resolves both lightweight and annotated tags to their commit.
+		var tagName = variables.s.tagPrefix & releaseVersion;
+		if ( arguments.existingTag ) {
+			requireExistingTagAtHead( tagName );
+		} else {
+			var tagCheck = variables.config.execNative( "git", [ "rev-parse", "-q", "--verify", "refs/tags/" & tagName ] );
+			if ( tagCheck.exitCode == 0 ) {
+				var tagCommit  = variables.config.execNative( "git", [ "rev-list", "-n", "1", "refs/tags/" & tagName ] );
+				var headCommit = variables.config.execNative( "git", [ "rev-parse", "HEAD" ] );
+				if (
+					tagCommit.exitCode == 0
+						&& headCommit.exitCode == 0
+						&& trim( tagCommit.output ) == trim( headCommit.output )
+				) {
+					return error(
+						"Tag #tagName# already exists at this commit. If Gitflow or GitKraken created it "
+						& "intentionally, publish it with: box run-script release:existing-tag"
+					);
+				}
+				return error(
+					"Tag #tagName# already exists locally at a different commit. Do not move a published tag. "
+					& "Verify the tag and release history, or choose a new version."
+				);
+			}
+			var remoteTag = variables.config.execNative(
+				"git",
+				[ "ls-remote", "--exit-code", "--tags", "origin", "refs/tags/" & tagName ]
 			);
+			if ( remoteTag.exitCode == 0 ) {
+				return error(
+					"Tag #tagName# already exists on origin. Fetch tags first. If a Gitflow tool created it "
+					& "for this release, run box run-script release:existing-tag from its tagged production "
+					& "commit; otherwise the version is already claimed."
+				);
+			}
+			if ( remoteTag.exitCode != 2 ) {
+				return error( "Could not check origin for tag #tagName# (#remoteTag.output#). Nothing has been published." );
+			}
 		}
 
 		// 5. The changelog must have a section for this version. This is what makes sure notes
@@ -179,8 +245,12 @@ component {
 		}
 
 		print
-			.greenLine( "  ok  clean checkout on #variables.s.branch#" )
-			.greenLine( "  ok  #releaseVersion# has not been released" )
+			.greenLine(
+				arguments.existingTag
+					? "  ok  existing tag #tagName# points to this commit"
+					: "  ok  clean checkout#( trim( branch.output ) == variables.s.branch ? " on " & variables.s.branch : "" )#"
+			)
+			.greenLine( arguments.existingTag ? "  ok  existing-tag publish mode" : "  ok  #releaseVersion# has not been released" )
 			.greenLine( variables.s.publish.github ? "  ok  changelog entry found" : "  --  changelog not needed" )
 			.greenLine( variables.s.publish.github && !arguments.dryRun ? "  ok  GitHub CLI ready" : "  --  GitHub CLI not needed" )
 			.toConsole();
@@ -194,14 +264,23 @@ component {
 	 *
 	 * Run on its own to finish a release that stopped after publishing.
 	 *
-	 * @version   The version being released.
-	 * @notesOnly Print the release notes and stop. Nothing is tagged or pushed.
-	 * @dryRun    Print what would run without doing it.
+	 * @version     The version being released.
+	 * @notesOnly   Print the release notes and stop. Nothing is tagged or pushed.
+	 * @dryRun      Print what would run without doing it.
+	 * @existingTag The expected tag already exists, so only create the GitHub Release.
 	 */
-	function github( string version = "", boolean notesOnly = false, boolean dryRun = false ){
+	function github(
+		string version      = "",
+		boolean notesOnly   = false,
+		boolean dryRun      = false,
+		boolean existingTag = false
+	){
 		var releaseVersion = len( trim( arguments.version ) ) ? trim( arguments.version ) : variables.config.version();
 		var tagName        = variables.s.tagPrefix & releaseVersion;
 		var slug           = variables.config.slug();
+		if ( arguments.existingTag ) {
+			requireExistingTagAtHead( tagName );
+		}
 
 		var notes = extractChangelogSection( releaseVersion );
 		if ( arguments.notesOnly ) {
@@ -236,12 +315,16 @@ component {
 		}
 
 		if ( arguments.dryRun ) {
-			print
+			var preview = print
 				.line()
-				.boldYellowLine( "Dry run, would now run:" )
-				.line( "  git tag #tagName#" )
-				.line( "  git push origin #variables.s.branch#" )
-				.line( "  git push origin #tagName#" )
+				.boldYellowLine( "Dry run, would now run:" );
+			if ( !arguments.existingTag ) {
+				preview
+					.line( "  git tag #tagName#" )
+					.line( "  git push origin #variables.s.branch#" )
+					.line( "  git push origin #tagName#" );
+			}
+			preview
 				.line( "  gh " & arrayToList( ghArgs, " " ) )
 				.line()
 				.boldLine( "Release notes it would use:" )
@@ -254,19 +337,22 @@ component {
 		// to finish by hand rather than suggesting another full run.
 		print.line().boldBlueLine( "=== Tagging and releasing on GitHub ===" ).toConsole();
 
-		var result = variables.config.execNative( "git", [ "tag", tagName ] );
-		if ( result.exitCode != 0 ) {
-			return error( "Could not create tag #tagName#: #result.output#" );
-		}
+		var result = { exitCode : 0, output : "" };
+		if ( !arguments.existingTag ) {
+			result = variables.config.execNative( "git", [ "tag", tagName ] );
+			if ( result.exitCode != 0 ) {
+				return error( "Could not create tag #tagName#: #result.output#" );
+			}
 
-		result = variables.config.execNative( "git", [ "push", "origin", variables.s.branch ] );
-		if ( result.exitCode != 0 ) {
-			return failWithManualSteps( "The push failed (#result.output#).", tagName, ghArgs );
-		}
+			result = variables.config.execNative( "git", [ "push", "origin", variables.s.branch ] );
+			if ( result.exitCode != 0 ) {
+				return failWithManualSteps( "The push failed (#result.output#).", tagName, ghArgs );
+			}
 
-		result = variables.config.execNative( "git", [ "push", "origin", tagName ] );
-		if ( result.exitCode != 0 ) {
-			return failWithManualSteps( "Pushing the tag failed (#result.output#).", tagName, ghArgs );
+			result = variables.config.execNative( "git", [ "push", "origin", tagName ] );
+			if ( result.exitCode != 0 ) {
+				return failWithManualSteps( "Pushing the tag failed (#result.output#).", tagName, ghArgs );
+			}
 		}
 
 		result = variables.config.execNative( "gh", ghArgs );
@@ -278,10 +364,42 @@ component {
 			);
 		}
 
-		print.greenLine( "Tagged #tagName# and created the GitHub Release." ).toConsole();
+		print
+			.greenLine(
+				arguments.existingTag
+					? "Created the GitHub Release for existing tag #tagName#."
+					: "Tagged #tagName# and created the GitHub Release."
+			)
+			.toConsole();
 	}
 
 	/********************************************* PRIVATE HELPERS *********************************************/
+
+	/**
+	 * requireExistingTagAtHead
+	 *
+	 * Proves an existing lightweight or annotated tag resolves to the checked-out commit. This
+	 * is called by both the full release and the standalone github target, so recovery commands
+	 * cannot accidentally attach artifacts from a different commit.
+	 *
+	 * @tagName The complete tag name, including its configured prefix.
+	 */
+	private function requireExistingTagAtHead( required string tagName ){
+		var tagCheck = variables.config.execNative( "git", [ "rev-parse", "-q", "--verify", "refs/tags/" & arguments.tagName ] );
+		if ( tagCheck.exitCode != 0 ) {
+			return error( "Existing-tag mode expected #arguments.tagName#, but that tag is not available in this checkout." );
+		}
+
+		var tagCommit  = variables.config.execNative( "git", [ "rev-list", "-n", "1", "refs/tags/" & arguments.tagName ] );
+		var headCommit = variables.config.execNative( "git", [ "rev-parse", "HEAD" ] );
+		if (
+			tagCommit.exitCode != 0
+				|| headCommit.exitCode != 0
+				|| trim( tagCommit.output ) != trim( headCommit.output )
+		) {
+			return error( "Tag #arguments.tagName# does not point at the checked-out commit. Refusing to publish the wrong source." );
+		}
+	}
 
 	/**
 	 * runBuild
@@ -294,8 +412,9 @@ component {
 	 *
 	 * @version   The version being built.
 	 * @skipTests Skip the test suite.
+	 * @buildID   Optional build identifier to pass through to Build.cfc.
 	 */
-	private function runBuild( required string version, boolean skipTests = false ){
+	private function runBuild( required string version, boolean skipTests = false, string buildID = "" ){
 		print.line().boldBlueLine( "=== Building ===" ).toConsole();
 
 		var buildFailed = false;
@@ -305,7 +424,8 @@ component {
 					taskFile     = variables.config.buildPath( "Build.cfc" ),
 					target       = "run",
 					":version"   = arguments.version,
-					":skipTests" = arguments.skipTests
+					":skipTests" = arguments.skipTests,
+					":buildID"   = arguments.buildID
 				)
 				.run();
 			buildFailed = ( shell.getExitCode() != 0 );
@@ -322,18 +442,14 @@ component {
 	/**
 	 * syncWithRemote
 	 *
-	 * Moves to the release branch and pulls, so the release matches what the remote holds. The
-	 * forced checkout is safe because preflight has already proved nothing is uncommitted.
+	 * Fast-forwards the checked-out production branch, so the release includes remote work but
+	 * never creates an accidental merge commit during publishing. Preflight has already proved
+	 * this is the configured branch and nothing is uncommitted.
 	 */
 	private function syncWithRemote(){
 		print.line().boldBlueLine( "=== Lining up with the remote ===" ).toConsole();
 
-		var result = variables.config.execNative( "git", [ "checkout", "-f", variables.s.branch ] );
-		if ( result.exitCode != 0 ) {
-			return error( "Could not switch to #variables.s.branch#: #result.output#" );
-		}
-
-		result = variables.config.execNative( "git", [ "pull", "origin", variables.s.branch ] );
+		var result = variables.config.execNative( "git", [ "pull", "--ff-only", "origin", variables.s.branch ] );
 		if ( result.exitCode != 0 ) {
 			var guidance = [ result.output ];
 			if ( result.output contains "publickey" ) {

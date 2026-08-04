@@ -5,7 +5,8 @@
 ## It is kept here so it does not run inside the build kit repository itself.
 ##
 ## It runs when you push a version tag (v1.2.3), or when you start it by hand from the
-## Actions tab. It builds the package, runs the tests, and publishes.
+## Actions tab. A tag run publishes that existing tag; a manual branch run lets the release
+## task create the tag. Both paths build the package, run the tests, and publish.
 ##
 ## Two secrets are needed in your repository settings:
 ##   FORGEBOX_API_TOKEN   from https://forgebox.io  (only if you publish to ForgeBox)
@@ -27,6 +28,9 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Check out the code
@@ -53,7 +57,7 @@ jobs:
           box server start serverConfigFile=server-lucee@5.json --!console
           # Wait for the app to answer before running the suite.
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:60299/ || true)
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:60310/ || true)
             if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then echo "server is up"; break; fi
             sleep 5
           done
@@ -70,4 +74,5 @@ jobs:
         run: |
           box task run taskFile=build/Release.cfc target=run \
             :version=$(box package show version) \
+            :existingTag=${{ github.ref_type == 'tag' }} \
             :buildID=${{ github.run_number }}

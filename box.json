@@ -63,6 +63,8 @@
         "stop:2025":"server stop serverConfigFile=server-adobe@2025.json",
         "logs:2025":"server log serverConfigFile=server-adobe@2025.json --follow",
         "test:engines":"task run taskFile=build/TestEngines.cfc",
+        "release:existing-tag":"task run taskFile=build/Release.cfc target=run :version=`package show version` :existingTag=true",
+        "release:skip-tests":"task run taskFile=build/Release.cfc target=run :version=`package show version` :skipTests=true",
         "release:hotfix":"task run taskFile=build/Release.cfc target=run :version=`package show version` :skipTests=true",
         "build:package":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
         "release:dryrun":"task run taskFile=build/Release.cfc target=run :version=`package show version` :dryRun=true",

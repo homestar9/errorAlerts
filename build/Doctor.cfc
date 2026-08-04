@@ -111,7 +111,7 @@ component {
 				false,
 				"clean checkout",
 				"#changed# uncommitted change#( changed == 1 ? "" : "s" )#",
-				"Commit or stash them: git commit -am ""...""; a release refuses to start otherwise."
+				"Run git status, stage the intended files with git add, then commit them; a release refuses to start otherwise."
 			);
 		} else {
 			report( true, "clean checkout", "nothing uncommitted" );
@@ -122,8 +122,8 @@ component {
 			report(
 				false,
 				"branch",
-				"on #branch#, releases come from #variables.s.branch#",
-				"Switch with: git checkout #variables.s.branch#   (or change ""branch"" in build/build.json)"
+				"on #branch#, releases come from production branch #variables.s.branch#",
+				"Switch with: git switch #variables.s.branch#   (or correct ""branch"" in build/build.json)"
 			);
 		} else {
 			report( true, "branch", branch );
