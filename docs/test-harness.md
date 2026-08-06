@@ -98,6 +98,24 @@ run:
   substring. The harness config lists `creditCardNumber` explicitly, which is
   why `/trigger/maskedRc` masks it; since `maskKeys` became empty by default,
   every masked name on that route comes from the harness's own opt-in list.
+- **The budget-bounded sanitizer removed the large-payload cost.** The benchmark
+  suite at `tests/specs/perf/PayloadBuilderBenchmarkTest.cfc`
+  (`?directory=tests.specs.perf`) was run on Lucee 5.4.8 before and after the
+  sanitizer rework, five runs per scenario, average shown:
+
+  | Scenario | Before | After |
+  | --- | --- | --- |
+  | 5 MB string in extraInfo | 47 ms | 3 ms |
+  | 20,000-key flat struct | 63 ms | 4 ms |
+  | 500 KB JSON body | 30 ms | 24 ms |
+  | 5 MB string with 17 maskKeys + 2 patterns | 54 ms | 1 ms |
+  | 1,000 structs x 10 keys, 100 maskKeys + 10 patterns | 59 ms | 2 ms |
+  | Small baseline payload | 2 ms | 2 ms |
+
+  The JSON-body scenario keeps most of its cost because `deserializeJSON` on a
+  500 KB body runs before the walk and is unavoidable. The heavy mask
+  configurations now cost less than the unmasked runs did, because the walk
+  stops as soon as the email's budget is full.
 - **A REST handler failure alerted twice before 2.4.0.** `/api/boom` produced two
   emails. `RestHandler.aroundHandler()` catches whatever the action throws and
   calls `onAnyOtherException()`, which logs at ERROR under the `handlers.Api`
