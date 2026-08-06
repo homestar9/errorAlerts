@@ -142,22 +142,36 @@ component {
 			includeRequestBody   : false,
 			// Cap the request body at this many characters.
 			requestBodyMaxLength : 4000,
-			/* Mask the value of any rc key or query string field named here.
-			 * The match is exact apart from case, so every field an application
-			 * wants hidden must be listed by its real name. `password` does not
-			 * cover `newPassword`. These defaults are only the common names —
-			 * check the actual form field names in your own app and add them. */
-			maskKeys             : [
-				"password",
-				"passwd",
-				"token",
-				"secret",
-				"apikey",
-				"api_key",
-				"authorization",
-				"creditcard",
-				"cvv"
-			]
+			/* Mask the value of any field named here, wherever it appears: rc
+			 * keys at any depth, JSON request body keys at any depth, extraInfo
+			 * keys at any depth, and query string field names. The match is
+			 * exact apart from case, so every field an application wants hidden
+			 * must be listed by its real name. `password` does not cover
+			 * `newPassword`. Empty by default: masking is opt-in, because the
+			 * application owner knows which field names carry secrets. The
+			 * README's masking section has a recommended starter list to paste.
+			 * Lookup is a hash check, so a long list costs nothing extra. */
+			maskKeys             : [],
+			/* Mask field names by wildcard pattern when no maskKeys entry
+			 * matches. `*` matches any run of characters and is the only
+			 * special character; matching ignores case and covers the whole
+			 * name, so "*socialsecurity*" catches
+			 * "indemnitor1SocialSecurityNumber". Keep patterns narrow: a broad
+			 * pattern hides fields nobody asked to hide, which is why exact
+			 * matching is the default mechanism. */
+			maskKeyPatterns      : [],
+			/* Cap each string value found while walking extraInfo or a JSON
+			 * request body. A longer value keeps its first characters plus a
+			 * label like "[truncated, 245120 chars total]", so a base64 PDF in
+			 * a payload cannot fill the email or slow the alert. 0 disables
+			 * the per-value cap; the whole-output caps still apply. */
+			longValueMaxLength   : 500,
+			/* Keys whose values skip the longValueMaxLength cap, matched
+			 * exactly ignoring case. Stack traces live under these names and
+			 * lose their useful frames when clipped to a short prefix. */
+			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
+			// Cap the sanitized extraInfo output at this many characters.
+			extraInfoMaxLength   : 2000
 		};
 	}
 

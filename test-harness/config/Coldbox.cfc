@@ -75,7 +75,22 @@ component {
 				from          : getSystemSetting( "ERRORALERTS_FROM", "harness@example.com" ),
 				subjectPrefix : "[Harness]",
 				// Send immediately so tests can inspect mail without waiting.
-				deliveryMode  : "send"
+				deliveryMode  : "send",
+				/* The module ships with an empty maskKeys: masking is opt-in.
+				 * The harness opts in so the masking demo routes and the
+				 * integration specs have field names to hide. */
+				maskKeys      : [
+					"password",
+					"passwd",
+					"token",
+					"secret",
+					"apikey",
+					"api_key",
+					"authorization",
+					"creditcard",
+					"creditCardNumber",
+					"cvv"
+				]
 			}
 		};
 

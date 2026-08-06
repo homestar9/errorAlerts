@@ -62,6 +62,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			includeHeaders       : [ "Content-Type" ],
 			includeRequestBody   : false,
 			requestBodyMaxLength : 4000,
+			/* The module default is now an empty array; unit specs keep an
+			 * explicit list so the masking behavior is actually exercised. */
 			maskKeys             : [
 				"password",
 				"passwd",
@@ -72,7 +74,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 				"authorization",
 				"creditcard",
 				"cvv"
-			]
+			],
+			maskKeyPatterns      : [],
+			longValueMaxLength   : 500,
+			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
+			extraInfoMaxLength   : 2000
 		};
 	}
 
