@@ -583,6 +583,40 @@ component {
 	}
 
 	/**
+	 * nestedSecrets
+	 *
+	 * Logs an error whose extraInfo nests secrets inside containers and carries
+	 * a base64 blob about 400 KB long, so the email can be checked for nested
+	 * masking and the long-value truncation label. The request collection gets
+	 * a nested struct too, so the rc table shows the same walk. The alert must
+	 * also build without a noticeable pause: before the budget-bounded walk,
+	 * the blob was serialized in full to produce 2,000 characters of email.
+	 */
+	function nestedSecrets( event, rc, prc ){
+		rc.profile = { name : "Ada Lovelace", ssn : "123-45-6789", password : "hunter2" };
+
+		logger( "orders.documents" ).error(
+			"Contract PDF generation failed",
+			{
+				"document" : {
+					"fileName"    : "contract.pdf",
+					"fileContent" : toBase64( repeatString( "fake-pdf-bytes-", 20000 ) )
+				},
+				"vendorAuth" : {
+					"apikey"   : "sk-live-9f3a2b71c4d8",
+					"endpoint" : "https://api.example.com/charge"
+				}
+			}
+		);
+		return sent(
+			"one error with nested secrets and a ~400 KB base64 blob. In the email: " &
+			"vendorAuth.apikey and rc.profile.password read *** masked ***, fileContent " &
+			"shows a 500-character prefix plus a size label, and rc.profile.ssn stays " &
+			"readable because the harness never added ssn to maskKeys - masking is opt-in"
+		);
+	}
+
+	/**
 	 * messyRc
 	 *
 	 * Fails with awkward value types in the request collection, so every branch
