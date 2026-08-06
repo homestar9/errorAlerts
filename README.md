@@ -230,7 +230,7 @@ A failing JSON API call shows no input by default, because the posted body never
 includeRequestBody : true
 ```
 
-JSON bodies get their top-level fields masked with `maskKeys` and are capped at `requestBodyMaxLength` characters. Form posts stay excluded because the `rc` table already shows those fields, masked.
+JSON bodies, objects and arrays alike, get their fields masked at any depth with the masking configuration and are capped at `requestBodyMaxLength` characters. Form posts stay excluded because the `rc` table already shows those fields, masked.
 
 ### Write test emails to files
 
@@ -274,6 +274,62 @@ component {
 
 Trigger a test error, then open the generated HTML file in the application's `mail-spool` folder. Do not use the File protocol as your production mailer.
 
+## Masking and sanitization
+
+Alert emails print request data, and request data can contain secrets. The module ships with **masking off**: `maskKeys` is empty, because only the application owner knows which field names carry secrets. Opt in by listing the real field names your application receives.
+
+### Exact key names: `maskKeys`
+
+```cfc
+maskKeys : [
+    // A starter list to copy. Keep what applies and add your own field names.
+    "password", "passwd", "token", "secret", "apikey", "api_key",
+    "authorization", "creditcard", "cvv",
+    "ssn", "cardNumber", "client_secret", "access_token", "refresh_token"
+]
+```
+
+Wherever a listed name appears — an `rc` key at any depth, a JSON request body field at any depth, an `extraInfo` key at any depth, or a query-string field name — its value is replaced with `*** masked ***`. Matching is exact apart from case: `password` does **not** cover `newPassword` or `passwordConfirm`, so list every variant your forms and APIs actually use. A long list costs nothing at alert time; the lookup is one hash check per field regardless of length.
+
+Masking a container key, such as `auth` or `profile`, hides the entire structure under it with one entry.
+
+### Wildcard patterns: `maskKeyPatterns`
+
+Vendor payloads spell fields their own way. A carrier might send `indemnitor1SocialSecurityNumber`, which an `ssn` entry can never match exactly. Instead of listing twenty spellings, add one pattern:
+
+```cfc
+maskKeyPatterns : [ "*socialsecurity*" ]
+```
+
+`*` matches any run of characters and is the only special character. Matching ignores case and covers the whole key name, so a pattern without `*` behaves exactly like a `maskKeys` entry. Patterns are checked only when the exact lookup misses, and each key name's verdict is remembered for the rest of the walk, so patterns stay cheap even against an array of a thousand structs.
+
+Keep patterns narrow. A broad pattern such as `*token*` hides fields nobody asked to hide — `tokenCount`, `nextPageToken` — which is the exact problem that made the module drop substring matching in 2.1.0.
+
+### Long values: `longValueMaxLength` and `longValueExemptKeys`
+
+Payloads sometimes carry huge strings: a base64-encoded PDF, a raw API response, a serialized report. By default any string value longer than `longValueMaxLength` (500) keeps its first 500 characters plus a label stating its real size:
+
+```text
+JVBERi0xLjcKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2… [truncated, 245120 chars total]
+```
+
+Set `longValueMaxLength : 0` to turn the per-value cap off. Keys named in `longValueExemptKeys` (default `_stacktrace` and `stacktrace`) skip the per-value cap so stack traces keep their frames; the whole-output caps still apply.
+
+This is also what keeps alert building fast. The sanitizer stops collecting once it has enough content to fill the email — `extraInfoMaxLength` (2,000) characters for `extraInfo`, `requestBodyMaxLength` for a JSON body — so a multi-megabyte payload is never copied or serialized in full. A very wide structure stops early and reports `[N more keys]` in place of the rest. A cutoff can only leave content out; every value that reaches the email has been through the mask check first.
+
+### Which do I need?
+
+| Situation | Reach for |
+|---|---|
+| You know the field name | `maskKeys` |
+| Many vendor spellings of one field | `maskKeyPatterns` |
+| A whole container with no diagnostic value | the container's key in `maskKeys` |
+| Huge values bloating or slowing alerts | nothing — on by default through `longValueMaxLength` |
+
+### What key masking can never reach
+
+Some content carries no field name to match against: the bound query parameter values shown by `includeQueryParams`, an exception's `detail` and `extendedInfo`, and secrets embedded inside plain string values, such as an OAuth token inside a JSON string a gateway stored in one field. Key masking cannot see into any of those. Do not put secrets in them; where a logging call site passes such a value, change the call site. Long-value truncation clips huge strings by default, which narrows this exposure but does not close it.
+
 ## Configuration reference
 
 ### Common settings
@@ -313,16 +369,22 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `userProvider` | `""` | A closure that receives WireBox and returns a display string for the signed-in user. See the recipe below. The `user` row only appears when this is set. |
 | `relativePaths` | `true` | Trims the application root from file paths so a path reads `/handlers/Main.cfc`. Paths outside the application root are always shown in full. Set `false` to keep every path absolute. |
 | `includeQueryParams` | `true` | Include the bound parameter values from a failed query. The best data for reproducing a database error, but the values can contain whatever a visitor typed, and `maskKeys` cannot filter them because they carry no field names. |
-| `maskQueryString` | `true` | Apply `maskKeys` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
+| `maskQueryString` | `true` | Apply `maskKeys` and `maskKeyPatterns` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
 | `emptyValueText` | `"N/A"` | Placeholder shown for a request value the request did not provide. |
 | `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section, matched ignoring case. `Cookie` and `Authorization` are never included, even when listed. |
-| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their top-level fields masked with `maskKeys`; form posts are skipped because `rc` already shows them masked. |
+| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their fields masked at any depth; form posts are skipped because `rc` already shows them masked. |
 | `requestBodyMaxLength` | `4000` | Maximum characters of request body shown. |
-| `maskKeys` | Password/token-related names | Request keys, query-string fields, JSON body fields, and `extraInfo` keys whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. `extraInfo` is masked at any nesting depth, stopping at five levels. |
+| `maskKeys` | `[]` | Field names whose values are replaced with `*** masked ***` wherever they appear: `rc` keys, JSON body fields, and `extraInfo` keys, all at any nesting depth stopping at five levels, plus query-string field names. Matching is exact, ignoring case. Empty by default: masking is opt-in. |
+| `maskKeyPatterns` | `[]` | Wildcard field-name patterns, checked only when the exact `maskKeys` lookup misses. `*` matches any run of characters; matching ignores case and covers the whole name. |
+| `longValueMaxLength` | `500` | Per-value cap for string values found while walking `extraInfo` or a JSON body. Longer values keep this many characters plus a label stating the real size. `0` disables the per-value cap. |
+| `longValueExemptKeys` | `[ "_stacktrace", "stacktrace" ]` | Keys whose values skip the per-value cap, matched exactly ignoring case, so stack traces keep their frames. The whole-output caps still apply. |
+| `extraInfoMaxLength` | `2000` | Maximum characters of sanitized `extraInfo` shown, and the collection budget for its walk. |
 
-The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Matching is an exact, case-insensitive comparison: `password` does **not** cover `newPassword` or `passwordConfirm`. Check the real field names your forms post and list every variant before using alerts in production.
+Masking is opt-in and has its own section above: see [Masking and sanitization](#masking-and-sanitization) for the starter list, wildcard patterns, and long-value truncation.
 
-Three things are still **not** masked, because they carry no field names to match against: the query parameter values shown by `includeQueryParams`, and an exception's `detail` and `extendedInfo`. Do not put secrets in those.
+### Upgrading past 2.4
+
+Masking became opt-in: `maskKeys` no longer ships any default entries. An application that never set `maskKeys` and relied on `password`, `token`, and the other seven former defaults being hidden must now list its own field names — copy the starter list in [Masking and sanitization](#masking-and-sanitization) and keep what applies. Two behavior changes come with the same release: nested keys inside `rc` values and JSON request bodies are now masked (both used to check top-level names only), and string values longer than `longValueMaxLength` (500) are clipped with a size label; set it to `0` to keep whole values.
 
 ### Upgrading to 2.3
 
@@ -400,7 +462,7 @@ A custom notifier does not require `to`. It must contain its own failures and mu
 - Throttle counters and pending digests are lost on application restart or `fwreinit`.
 - Throttling is per JVM, so web-farm nodes do not share counters.
 - The default queued delivery avoids blocking the failing request, but delivery timing depends on the cbmailservices scheduler.
-- Request values are truncated and keys named in `maskKeys` are masked, but the match is exact: review `maskKeys` and list every sensitive field name your application actually uses.
+- Masking is opt-in: `maskKeys` ships empty, and the exact match means every sensitive field name your application actually uses has to be listed. Review [Masking and sanitization](#masking-and-sanitization) before production use.
 
 ## Contributing
 

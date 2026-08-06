@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Masking is now opt-in: `maskKeys` defaults to an empty array.** The nine
+  former default entries (`password`, `passwd`, `token`, `secret`, `apikey`,
+  `api_key`, `authorization`, `creditcard`, `cvv`) are gone. An application that
+  never set `maskKeys` and relied on those names being hidden must now list its
+  own field names; the README's new "Masking and sanitization" section carries a
+  starter list to copy. Applications that already set `maskKeys` are unaffected,
+  because overriding the setting always replaced the whole list.
+- Keys nested inside `rc` values and inside JSON request bodies are now masked.
+  Before this, only top-level names were checked, so `rc.payment.cardNumber`
+  was serialized into the email in full while a top-level `cardNumber` was
+  masked. JSON **array** request bodies, which previously skipped masking
+  entirely, are walked too.
+
+### Added
+
+- `maskKeyPatterns` setting: wildcard field-name matching for vendor spellings
+  an exact list cannot keep up with, such as `indemnitor1SocialSecurityNumber`.
+  `*` matches any run of characters; matching ignores case, covers the whole
+  name, and runs only when the exact `maskKeys` lookup misses.
+- `longValueMaxLength` setting, default `500`: any string value found while
+  walking `extraInfo` or a JSON body keeps this many characters plus a label
+  such as `[truncated, 245120 chars total]`. This is the answer to base64 PDFs
+  and other blobs landing in payloads. `0` disables the per-value cap.
+- `longValueExemptKeys` setting, default `[ "_stacktrace", "stacktrace" ]`:
+  values under these keys skip the per-value cap so stack traces keep their
+  frames.
+- `extraInfoMaxLength` setting, default `2000`: the `extraInfo` output cap,
+  previously hardcoded.
+- A benchmark suite at `tests/specs/perf` timing alert building against large
+  payloads, runnable alone with `?directory=tests.specs.perf`.
+
+### Changed
+
+- The sanitizer was rebuilt around one budget-bounded walk. Masked-key lookup
+  is now a hash check, so the length of `maskKeys` no longer affects alert
+  cost, and the walk stops collecting once it has enough content to fill the
+  email. A 5 MB string in `extraInfo` previously cost a full serialization to
+  produce 2,000 characters of email; it now costs a bounded copy. Very wide
+  structures stop early and report `[N more keys]` in place of the rest. A
+  cutoff can only omit content, never bypass masking.
+- Long simple values in the `rc` table now end with the size label instead of a
+  bare ellipsis.
+- A null `rc` value now renders `[null]`. Before this it threw inside the
+  sanitizer and the whole `rc` table silently disappeared from the email.
+
 ## [2.4.0] - 2026-08-05
 
 ### Security
