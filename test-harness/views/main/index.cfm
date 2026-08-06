@@ -31,7 +31,8 @@
 				{ route : "/trigger/timeoutError", note : "The shape of a slow-dependency timeout." },
 				{ route : "/trigger/noSuchAction", note : "Real handler, action that was never written." },
 				{ route : "/trigger/invalidEvent", note : "Handler that does not exist at all." },
-				{ route : "/api/boom", note : "Throws inside a RestHandler, which has its own onError." },
+				{ route : "/api/boom", note : "Throws inside a RestHandler, which logs and announces the same exception. One email." },
+				{ route : "/apiFault/boom", note : "Throws in a RestHandler preHandler, which reaches onError(). That log is the only report, so it still alerts." },
 				{ route : "/api/logged", note : "A RestHandler that catches and logs its own failure." }
 			]
 		},

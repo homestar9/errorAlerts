@@ -68,6 +68,82 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
 			} );
 
+			describe( "duplicate framework logs", function(){
+				/* ColdBox's RestHandler.onAnyOtherException() logs the exception
+				 * and then announces onException on the next line. Both reach
+				 * the module, so the logged copy is dropped. RestHandler.onError()
+				 * logs the same shape but announces nothing, so its copy must be
+				 * kept or that alert disappears completely. */
+
+				it( "skips the log that RestHandler.onAnyOtherException also announces", function(){
+					capture.capture(
+						newLogEvent(
+							message   = "Error calling quotes.index: boom detail",
+							extraInfo = newRestHandlerExtraInfo(),
+							category  = "modules_app.api.handlers.Quotes"
+						)
+					);
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+					expect( throttleStub.$count( "record" ) ).toBe( 0, "the event never reaches the throttle" );
+				} );
+
+				it( "keeps the RestHandler.onError log, which announces nothing", function(){
+					capture.capture(
+						newLogEvent(
+							message   = "Error in base handler (index): boom detail",
+							extraInfo = newRestHandlerExtraInfo(),
+							category  = "modules_app.api.handlers.Quotes"
+						)
+					);
+					expect( notifierStub.$count( "sendNotification" ) ).toBe(
+						1,
+						"nothing else reports this exception"
+					);
+				} );
+
+				it( "keeps an 'Error calling' log that carries a real tagContext", function(){
+					capture.capture(
+						newLogEvent( message = "Error calling quotes.index: boom", extraInfo = newExceptionInfo() )
+					);
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "keeps the duplicate when suppressDuplicateFrameworkLogs is off", function(){
+					settings.suppressDuplicateFrameworkLogs = false;
+					capture.capture(
+						newLogEvent(
+							message   = "Error calling quotes.index: boom detail",
+							extraInfo = newRestHandlerExtraInfo()
+						)
+					);
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1, "the escape hatch works" );
+				} );
+
+				it( "keeps a log whose extraInfo has no httpData", function(){
+					capture.capture(
+						newLogEvent(
+							message   = "Error calling quotes.index: boom detail",
+							extraInfo = { "_stacktrace" : "java.lang.Exception: boom" }
+						)
+					);
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1, "not the RestHandler shape" );
+				} );
+
+				it( "handles a message shorter than the matched prefix", function(){
+					expect( function(){
+						capture.capture( newLogEvent( message = "Boom", extraInfo = newRestHandlerExtraInfo() ) );
+					} ).notToThrow( message = "left() would throw on Adobe ColdFusion; findNoCase() does not" );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "handles a simple extraInfo value", function(){
+					expect( function(){
+						capture.capture( newLogEvent( message = "Error calling quotes.index: boom", extraInfo = "just a string" ) );
+					} ).notToThrow();
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+			} );
+
 			it( "snapshots the route and client for digest sampling", function(){
 				makePublic( capture, "buildSnapshot" );
 

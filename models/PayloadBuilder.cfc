@@ -83,7 +83,7 @@ component singleton accessors="true" {
 
 		// Add extraInfo only when it was not already added as an exception.
 		if ( settings.includeScopes.extraInfo && payload.exception.isEmpty() ) {
-			payload.extraInfo = stringify( arguments.logEvent.getExtraInfo(), 2000 );
+			payload.extraInfo = stringify( sanitizeDeep( arguments.logEvent.getExtraInfo() ), 2000 );
 		}
 
 		return payload;
@@ -1293,6 +1293,62 @@ component singleton accessors="true" {
 		}
 
 		return truncate( stringify( arguments.value, settings.rcValueMaxLength ), settings.rcValueMaxLength );
+	}
+
+	/**
+	 * sanitizeDeep
+	 *
+	 * Returns a copy of a value with every key named in settings.maskKeys
+	 * replaced, at any nesting depth. Structs and arrays are walked. Any other
+	 * value is returned as it is, so the caller's own length limit still applies.
+	 *
+	 * This is needed because ColdBox's RestHandler passes getHTTPRequestData()
+	 * into extraInfo, which puts the Authorization header into the email.
+	 * buildHeaders() cannot help: the hardcoded Cookie and Authorization block
+	 * there only covers the Request section, and this value arrives through
+	 * extraInfo instead.
+	 *
+	 * Values are not truncated here. sanitizeValue() clips every value to
+	 * rcValueMaxLength, which would cut a stack trace down to nothing, so this
+	 * method only masks and lets the caller's stringify() cap the whole result.
+	 *
+	 * A failure returns a placeholder instead of the original value, so an error
+	 * while sanitizing can never print a secret.
+	 *
+	 * @value The value to sanitize, any type.
+	 * @depth The current nesting level. Deep or looping structures stop at 5.
+	 */
+	private any function sanitizeDeep( required any value, numeric depth = 0 ){
+		try {
+			if ( arguments.depth > 5 ) {
+				return "[nested too deep]";
+			}
+
+			if ( isArray( arguments.value ) ) {
+				var cleanList = [];
+				for ( var item in arguments.value ) {
+					cleanList.append( sanitizeDeep( item, arguments.depth + 1 ) );
+				}
+				return cleanList;
+			}
+
+			// isStruct() is true for many object types, so check isObject()
+			// first and leave objects alone rather than trying to walk them.
+			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
+				return arguments.value;
+			}
+
+			var clean = structNew( "ordered" );
+			for ( var key in arguments.value ) {
+				clean[ key ] = isMasked( key ) ? "*** masked ***" : sanitizeDeep(
+					arguments.value[ key ],
+					arguments.depth + 1
+				);
+			}
+			return clean;
+		} catch ( any e ) {
+			return "[value could not be sanitized]";
+		}
 	}
 
 	/**

@@ -55,6 +55,7 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - **Framework reinit:** `?fwreinit=true`.
 - Avoid em-dashes in prose unless they genuinely aid clarity.
 - Do not run `cfformat` on the repo. 
+- This repo uses Git Flow for branching.
 
 ## Writing style for Code Comments and Responses
 

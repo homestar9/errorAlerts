@@ -38,6 +38,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			digestSampleSize     : 5,
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
 			ignoreExceptionTypes : [],
+			suppressDuplicateFrameworkLogs : true,
 			normalizeSignatures  : true,
 			maxBodyBytes         : 102400,
 			rcValueMaxLength     : 200,
@@ -113,6 +114,33 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 				{ template : "/app/handlers/Orders.cfc", line : 10 },
 				{ template : "/coldbox/system/EventHandler.cfc", line : 99 }
 			]
+		};
+	}
+
+	/**
+	 * newRestHandlerExtraInfo
+	 *
+	 * Builds the extraInfo struct that ColdBox's RestHandler passes to its own
+	 * logger from both onAnyOtherException() and onError(). Note the underscore
+	 * in `_stacktrace` and the absence of `tagContext`, which is why this shape
+	 * produces no stack frames and no code snippet in an alert. The httpData
+	 * value comes from getHTTPRequestData( false ), which omits the body but
+	 * still carries every request header.
+	 *
+	 * @authorization The Authorization header value to place in httpData.
+	 */
+	struct function newRestHandlerExtraInfo( string authorization = "Bearer harness-secret-token" ){
+		return {
+			"_stacktrace" : "java.lang.Exception: REST endpoint failed" & chr( 10 ) & repeatString( "  at com.example.Frame#chr( 10 )#", 40 ),
+			"httpData"    : {
+				"method"   : "GET",
+				"protocol" : "HTTP/1.1",
+				"headers"  : {
+					"Authorization" : arguments.authorization,
+					"Content-Type"  : "application/json",
+					"Host"          : "harness.example.com"
+				}
+			}
 		};
 	}
 
