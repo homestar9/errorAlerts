@@ -128,6 +128,8 @@ With the defaults, if the same error occurs five times within ten minutes:
 
 Throttle counters are stored in memory and are separate for each application server.
 
+Throttling cannot merge two reports of the same exception when they arrive with different categories and messages. That is why ColdBox's `RestHandler` needs its own handling rather than a throttle rule: it logs an exception under the calling handler's category and then announces `onException` on the next line, and the two copies hash to different signatures. The module drops the logged copy and keeps the announced one, because only the announced copy carries a real `tagContext` and is therefore the only one that can show a stack trace and a code snippet. See `suppressDuplicateFrameworkLogs` in the advanced settings.
+
 ## Common configuration recipes
 
 Most examples in this section go inside the struct returned by `config/modules/errorAlerts.cfc`. A few show that whole file instead, because they add a function next to `configure()`.
@@ -297,6 +299,7 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | Setting | Default | Description |
 |---|---|---|
 | `notifier` | `"EmailNotifier@errorAlerts"` | WireBox ID of the notification provider. |
+| `suppressDuplicateFrameworkLogs` | `true` | Drops the LogBox copy of an exception that ColdBox's `RestHandler` both logs and announces, so a REST application receives one alert instead of two. `ignoreCategories` cannot do this, because `RestHandler` logs under the calling handler's own category, which differs for every handler. Set `false` only if you have unregistered the module's `UnhandledExceptionCapture` interceptor, since that interceptor is what reports the kept copy. |
 | `throttle.maxTrackedSignatures` | `500` | Maximum error signatures kept in memory. New signatures send unthrottled when the limit is reached. |
 | `digestFlushSeconds` | `60` | How often expired throttle windows are checked for pending digests. |
 | `normalizeSignatures` | `true` | Replaces digit runs and UUIDs before errors are grouped. |
@@ -315,9 +318,11 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section, matched ignoring case. `Cookie` and `Authorization` are never included, even when listed. |
 | `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their top-level fields masked with `maskKeys`; form posts are skipped because `rc` already shows them masked. |
 | `requestBodyMaxLength` | `4000` | Maximum characters of request body shown. |
-| `maskKeys` | Password/token-related names | Request keys and query-string fields whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. |
+| `maskKeys` | Password/token-related names | Request keys, query-string fields, JSON body fields, and `extraInfo` keys whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. `extraInfo` is masked at any nesting depth, stopping at five levels. |
 
 The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Matching is an exact, case-insensitive comparison: `password` does **not** cover `newPassword` or `passwordConfirm`. Check the real field names your forms post and list every variant before using alerts in production.
+
+Three things are still **not** masked, because they carry no field names to match against: the query parameter values shown by `includeQueryParams`, and an exception's `detail` and `extendedInfo`. Do not put secrets in those.
 
 ### Upgrading to 2.3
 

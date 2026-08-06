@@ -64,6 +64,16 @@ component {
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
 			// Ignore exceptions with one of these exact type values.
 			ignoreExceptionTypes : [],
+			/* ColdBox's RestHandler.onAnyOtherException() logs an exception and
+			 * then announces onException on the next line, so a REST app gets
+			 * two emails for one error. This drops the logged copy and keeps
+			 * the announced one, which is the only copy carrying a real
+			 * tagContext and so the only one that can show a stack trace and a
+			 * code snippet. ignoreCategories cannot do this, because
+			 * RestHandler logs under the calling handler's own category, which
+			 * differs for every handler. Set false only if you have
+			 * unregistered UnhandledExceptionCapture@errorAlerts. */
+			suppressDuplicateFrameworkLogs : true,
 			// Replace numbers and UUIDs before creating a signature.
 			normalizeSignatures  : true,
 			// Limit the content included in each email.

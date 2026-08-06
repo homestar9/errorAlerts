@@ -39,6 +39,10 @@ component singleton accessors="true" {
 				return;
 			}
 
+			if ( isDuplicateFrameworkLog( arguments.logEvent ) ) {
+				return;
+			}
+
 			var signature = signatureService.compute( arguments.logEvent );
 			var verdict   = throttleService.record(
 				signature = signature,
@@ -127,6 +131,53 @@ component singleton accessors="true" {
 		}
 
 		return false;
+	}
+
+	/**
+	 * isDuplicateFrameworkLog
+	 *
+	 * Checks whether this log event is ColdBox's RestHandler logging an
+	 * exception that it announces as onException on the very next line. The
+	 * module's interceptor captures that announcement, so without this check a
+	 * REST application receives two emails for one exception.
+	 *
+	 * The logged copy is the one dropped, because the announced copy is better.
+	 * RestHandler passes { _stacktrace, httpData } as extraInfo. That struct has
+	 * no tagContext, so SignatureService.topFrame() and applicationFrame() both
+	 * return an empty string, PayloadBuilder renders no stack trace and no code
+	 * snippet, and FrameClassifier never runs. The interceptor passes the real
+	 * cfcatch, which has all of that.
+	 *
+	 * The message prefix is matched on purpose. RestHandler.onError() logs the
+	 * same { _stacktrace, httpData } shape but does NOT announce onException, so
+	 * matching on the struct shape alone would drop those alerts with nothing
+	 * left to report them. If ColdBox changes this message text, the check stops
+	 * matching and the duplicate email returns, which is noticed right away. It
+	 * cannot cause a lost alert.
+	 *
+	 * @logEvent The LogBox LogEvent to test.
+	 */
+	private boolean function isDuplicateFrameworkLog( required any logEvent ){
+		if ( !settings.suppressDuplicateFrameworkLogs ) {
+			return false;
+		}
+
+		var extraInfo = arguments.logEvent.getExtraInfo();
+		// Adobe ColdFusion cfcatch values can be objects instead of structs.
+		// Use structKeyExists() so both forms can be checked safely.
+		if (
+			!( isObject( extraInfo ) || isStruct( extraInfo ) )
+			|| !structKeyExists( extraInfo, "_stacktrace" )
+			|| !structKeyExists( extraInfo, "httpData" )
+			|| structKeyExists( extraInfo, "tagContext" )
+		) {
+			return false;
+		}
+
+		// findNoCase() == 1 rather than left( 14 ): on Adobe ColdFusion left()
+		// throws when the string is shorter than the requested length, and a log
+		// message can be shorter than the prefix.
+		return arguments.logEvent.getMessage().findNoCase( "Error calling " ) == 1;
 	}
 
 	/**

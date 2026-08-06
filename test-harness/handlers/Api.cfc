@@ -4,10 +4,13 @@
  * A REST handler that fails, so the module's behavior can be compared against
  * the plain handler in Trigger.cfc.
  *
- * RestHandler catches exceptions in its own onError(), which logs at ERROR under
- * this handler's category. That reaches the module's appender, and ColdBox also
- * announces onException, so /api/boom produces two alert emails where a plain
- * handler produces one. See docs/test-harness.md.
+ * RestHandler.aroundHandler() catches whatever the action throws and sends it to
+ * onAnyOtherException(), which logs the exception at ERROR under this handler's
+ * category and then announces onException on the next line. Both reach the
+ * module, so /api/boom used to produce two emails. The module now drops the
+ * logged copy, because only the announced copy carries a real tagContext and so
+ * can show a stack trace and a code snippet. See ApiFault.cfc for the path that
+ * logs without announcing, and docs/test-harness.md.
  */
 component extends="coldbox.system.RestHandler" {
 

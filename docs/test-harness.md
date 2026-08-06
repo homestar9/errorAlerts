@@ -91,10 +91,23 @@ run:
   string row. Note that matching is exact since 2.1.0: `creditCardNumber` is
   only masked if the app lists it - the default entry `creditcard` no longer
   covers it by substring.
-- **A REST handler failure alerts twice.** `/api/boom` produces two emails: one
-  from `RestHandler.onError()`, which logs at ERROR under the `handlers.Api`
-  category and so reaches the appender, and one from the module's `onException`
-  interceptor. A plain handler produces one.
+- **A REST handler failure alerted twice before 2.4.0.** `/api/boom` produced two
+  emails. `RestHandler.aroundHandler()` catches whatever the action throws and
+  calls `onAnyOtherException()`, which logs at ERROR under the `handlers.Api`
+  category and then announces `onException` on the next line, so both the
+  appender and the module's interceptor captured the same exception.
+  `ignoreCategories` cannot filter that log, because `RestHandler` logs under the
+  calling handler's own category, which differs for every handler. Since 2.4.0
+  the `suppressDuplicateFrameworkLogs` setting drops the logged copy and keeps
+  the announced one, which is the only copy carrying a real `tagContext` and so
+  the only one that can show a stack trace and a code snippet. `/api/boom` now
+  produces one email, the same as a plain handler.
+- **The `onError` path still alerts, and that is deliberate.**
+  `RestHandler.onError()` logs the same `{ _stacktrace, httpData }` shape but
+  announces nothing, so its log is the only report of the failure. Suppressing it
+  would lose the alert. `/apiFault/boom` throws in `preHandler`, which escapes
+  `aroundHandler` and reaches `onError()`, and produces one email. Note that
+  `onError()` rethrows instead of logging when ColdBox `debugMode` is on.
 - **`maxBodyBytes` is rarely what clips an email.** `/trigger/hugeMessage` throws
   a 250KB message with a 250KB detail and the email arrives at about 12KB,
   because `EmailRenderer` caps the message section at 2048 characters first.

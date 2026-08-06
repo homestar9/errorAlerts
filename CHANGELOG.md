@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `extraInfo` values are now masked with `maskKeys` at any nesting depth, up to
+  five levels. Before this, a struct passed as the second argument to
+  `logger.error()` was serialized into the email exactly as given, so a key such
+  as `password` or `authorization` was printed in full. Applications using
+  `coldbox.system.RestHandler` were affected without doing anything: RestHandler
+  passes `getHTTPRequestData()` into `extraInfo`, which carries every request
+  header, including `Authorization`. The `Cookie` and `Authorization` block in
+  the Request section never covered this, because that value arrives through
+  `extraInfo` instead of through `includeHeaders`.
+- Query parameter values, and an exception's `detail` and `extendedInfo`, are
+  still not masked. They carry no field names to match against. This is now
+  stated in the README rather than left unsaid.
+
+### Fixed
+
+- Applications whose handlers extend `coldbox.system.RestHandler` no longer
+  receive two alert emails for one exception. `RestHandler.onAnyOtherException()`
+  logs the exception and then announces `onException` on the next line, so both
+  the module's LogBox appender and its interceptor captured the same failure.
+  The two copies had different categories and messages, so throttling treated
+  them as unrelated errors and sent both. `ignoreCategories` could not filter the
+  logged copy, because RestHandler logs under the calling handler's own category,
+  which differs for every handler.
+- The logged copy is the one dropped. Only the announced copy carries a real
+  `tagContext`, so it is the only one that can produce stack frames, an
+  application-frame attribution, and a code snippet.
+- `RestHandler.onError()` logs the same shape but announces nothing, so its
+  alert is kept. Suppressing it would have removed the only report of a
+  failure in `preHandler`, `postHandler`, or `aroundHandler`.
+
+### Added
+
+- `suppressDuplicateFrameworkLogs` setting, default `true`. Set it to `false`
+  only if you have unregistered the module's `UnhandledExceptionCapture`
+  interceptor, since that interceptor reports the copy that is kept.
+
 ## [2.3.0] - 2026-08-04
 
 ### Changed

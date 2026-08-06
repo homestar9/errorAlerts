@@ -53,6 +53,47 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].body ).toInclude( "origin", "the request section always names the origin" );
 			} );
 
+			it( "sends one email when RestHandler logs and announces the same exception", function(){
+				/* RestHandler.onAnyOtherException() logs under the calling
+				 * handler's own category and then announces onException, so both
+				 * capture paths see one exception. Only the announced copy has a
+				 * real tagContext, so that is the copy kept. */
+				var restExtraInfo = {
+					"_stacktrace" : "java.lang.Exception: rest boom",
+					"httpData"    : { "headers" : { "Authorization" : "Bearer e2e-secret" } }
+				};
+
+				getController()
+					.getLogBox()
+					.getLogger( "modules_app.api.handlers.Quotes" )
+					.error( "Error calling quotes.index: rest boom detail", restExtraInfo );
+				getController()
+					.getInterceptorService()
+					.announce( "onException", { exception : newExceptionInfo( "rest boom" ) } );
+
+				var mailbox = getMailbox();
+				expect( mailbox.len() ).toBe( 1, "the logged copy is dropped, the announced copy is kept" );
+				expect( mailbox[ 1 ].subject ).toInclude( "Unhandled exception" );
+				expect( mailbox[ 1 ].body ).toInclude( "Main.cfc", "the kept copy has real stack frames" );
+			} );
+
+			it( "still emails the RestHandler.onError log, which announces nothing", function(){
+				var restExtraInfo = {
+					"_stacktrace" : "java.lang.Exception: fault boom",
+					"httpData"    : { "headers" : { "Authorization" : "Bearer e2e-secret" } }
+				};
+
+				getController()
+					.getLogBox()
+					.getLogger( "modules_app.api.handlers.Quotes" )
+					.error( "Error in base handler (index): fault boom detail", restExtraInfo );
+
+				var mailbox = getMailbox();
+				expect( mailbox.len() ).toBe( 1, "nothing else reports this exception" );
+				expect( mailbox[ 1 ].body ).toInclude( "fault boom" );
+				expect( mailbox[ 1 ].body ).notToInclude( "e2e-secret", "maskKeys covers extraInfo" );
+			} );
+
 			it( "ignores categories on the ignore list", function(){
 				getController().getLogBox().getLogger( "cbmailservices.queue" ).error( "mail down" );
 				getController().getLogBox().getLogger( "coldbox.system.Bootstrap" ).error( "already intercepted" );
