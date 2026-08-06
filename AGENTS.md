@@ -57,46 +57,21 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - Do not run `cfformat` on the repo. 
 - This repo uses Git Flow for branching.
 
-## Writing style for Code Comments and Responses
+## Masking engine invariants
 
-Use clear, literal, plain English. **Optimize for immediate understanding, not cleverness or brevity.**
-
-Follow these rules:
-
-- Write for an 8th grade reading level.
-- Lead with the direct answer or conclusion.
-- Explain the reasoning in a logical order.
-- Use one main idea per sentence.
-- Use technical terminology when it is the clearest term, but explain unfamiliar or project-specific terms.
-- Use concrete descriptions instead of metaphors, idioms, or conversational shorthand.
-- Do not assume that shorter writing is clearer writing.
-- Do not use the following phrases:
-  - "dead input,"
-  - "survives,"
-  - "the machinery,"
-  - "wires up,"
-  - "drives,"
-  - "gates,"
-  - "surfaces"
-  - "holding pen"
-  - "graduate"
-  - "remounts"
-- Favor literal language that explains behavior more clearly.
- 
-Before sending an explanation, reread it and ask:
-
-1. Would a developer unfamiliar with this codebase understand every sentence on the first reading?
-2. Does every pronoun have an obvious referent?
-3. Did I skip any reasoning needed to connect the evidence to the conclusion?
-4. Did I use a clever phrase where a literal explanation would be clearer?
-
-If any answer is no, rewrite the response before sending it.
-
-## Use the Right Subagent For the Job
-
-When delegating work to sub-agents, use the least expensive model that can complete each task reliably. Use lightweight models for mechanical work such as locating files, reading straightforward code, gathering facts, or running simple checks. Use robust reasoning models for architecture, complex debugging, security review, open-ended exploration, creative work, or tasks requiring judgment. When complexity or risk is uncertain, favor the stronger model, and escalate if a lightweight agent encounters ambiguity.
-
-If something the user says is unclear, ask the user questions until you have a solid understanding.
+- `defaultSettings()` in `test-harness/tests/resources/BaseUnitSpec.cfc` must mirror the settings
+  struct in `ModuleConfig.cfc` key for key. Every unit spec reads that fixture, so adding a setting
+  is always a two-file change, in the same commit.
+- The masking order is fixed: exact `maskKeys` hash lookup, then `maskKeyPatterns` wildcards only on
+  a miss, then long-value truncation. Masking is opt-in - `maskKeys` ships empty - and matching is
+  exact by design; substring matching was removed in 2.1.0 because it hid keys like `tokenCount`.
+- The sanitizer's walk is budget-bounded: it never collects more content than the output caps
+  (`extraInfoMaxLength`, `requestBodyMaxLength`, `rcValueMaxLength`) can display. A cutoff may omit
+  content but must never emit a value that skipped the mask check.
+- The mask token `*** masked ***` is deliberately not configurable.
+- `test-harness/tests/specs/perf/PayloadBuilderBenchmarkTest.cfc` times alert building against large
+  payloads (`?directory=tests.specs.perf`). Run it before and after touching PayloadBuilder's
+  sanitize path and compare against the numbers in the relevant commit messages.
 
 ## Releasing
 
