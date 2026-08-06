@@ -2,7 +2,10 @@
  * EmailRenderer
  *
  * Renders payload structs as table-based HTML with inline styles.
- * PayloadBuilder sanitizes request data before it reaches this component.
+ * PayloadBuilder applies maskKeys to request data and to extraInfo before it
+ * reaches this component. Exception fields such as detail, extendedInfo, and
+ * query parameter values are not masked, because they carry no field names to
+ * match against.
  * Sections are added in priority order until the character budget is used.
  */
 component singleton accessors="true" {

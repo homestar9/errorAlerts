@@ -65,6 +65,60 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.extraInfo ).toInclude( "context" );
 			} );
 
+			it( "masks the Authorization header RestHandler puts in extraInfo", function(){
+				/* RestHandler passes getHTTPRequestData() as extraInfo, so every
+				 * request header lands in the email. That value never reaches
+				 * buildHeaders(), where Cookie and Authorization are blocked. */
+				var payload = builder.build(
+					newLogEvent( extraInfo = newRestHandlerExtraInfo( "Bearer leak-me-please" ) ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo ).toInclude( "*** masked ***" );
+				expect( payload.extraInfo ).notToInclude( "leak-me-please" );
+			} );
+
+			it( "masks a sensitive key nested several levels down", function(){
+				var info = { level1 : { level2 : { password : "nested-secret", keepMe : "visible" } } };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( "*** masked ***" );
+				expect( payload.extraInfo ).notToInclude( "nested-secret" );
+				expect( payload.extraInfo ).toInclude( "visible", "a key nobody asked to hide stays readable" );
+			} );
+
+			it( "masks sensitive keys inside an array of structs", function(){
+				var info = { calls : [ { url : "/v1/orders", apikey : "array-secret" } ] };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).notToInclude( "array-secret" );
+				expect( payload.extraInfo ).toInclude( "/v1/orders" );
+			} );
+
+			it( "does not truncate extraInfo values to rcValueMaxLength", function(){
+				/* sanitizeValue() clips to rcValueMaxLength, which would cut a
+				 * stack trace down to nothing. Only the caller's 2000-character
+				 * cap applies here. */
+				var info = { "_stacktrace" : repeatString( "y", 900 ) };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo.len() ).toBeGT(
+					settings.rcValueMaxLength * 2,
+					"the stack trace must survive masking intact"
+				);
+			} );
+
+			it( "leaves the exception path untouched when extraInfo is a real exception", function(){
+				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toBeEmpty( "an exception fills payload.exception instead" );
+				expect( payload.exception.message ).toBe( "Fixture explosion" );
+			} );
+
 			it( "sanitizes rc: masks exact key matches, truncates, and serializes complex values", function(){
 				var rc = structNew( "ordered" );
 				rc[ "id" ]           = "42";
