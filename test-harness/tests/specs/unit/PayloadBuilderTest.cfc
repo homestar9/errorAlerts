@@ -138,9 +138,203 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( result[ "PASSWORD" ] ).toBe( "*** masked ***", "matching ignores case" );
 				expect( result.apiToken ).toBe( "abc", "exact matching must not hide a key that merely contains 'token'" );
 				expect( result.passwordHint ).toBe( "my hint", "a near-miss key must not be masked" );
-				expect( result.longText.len() ).toBeLTE( settings.rcValueMaxLength + 1, "truncated plus ellipsis" );
+				expect( result.longText ).toInclude( "[truncated, 500 chars total]", "a clipped value states its real size" );
+				expect( result.longText.len() ).toBeLTE(
+					settings.rcValueMaxLength + 40,
+					"the clipped prefix plus the size label"
+				);
 				expect( result.filters ).toInclude( "active" );
 				expect( result.payload ).toInclude( "binary" );
+			} );
+
+			it( "masks nothing when maskKeys and maskKeyPatterns are empty", function(){
+				// The module default: masking is opt-in.
+				settings.maskKeys        = [];
+				settings.maskKeyPatterns = [];
+				var payload = builder.build(
+					newLogEvent( extraInfo = { password : "visible-now", nested : { token : "also-visible" } } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo ).toInclude( "visible-now" );
+				expect( payload.extraInfo ).toInclude( "also-visible" );
+				expect( payload.extraInfo ).notToInclude( "masked" );
+			} );
+
+			it( "masks sensitive keys nested inside rc values", function(){
+				var rc = structNew( "ordered" );
+				rc[ "payment" ] = { cardholder : "Ada Lovelace", password : "nested-rc-secret" };
+				rc[ "calls" ]   = [ { url : "/v1/pay", apikey : "array-rc-secret" } ];
+				builder.$property( propertyName = "coldbox", mock = newControllerStub( rc ) );
+
+				var result = builder.build( newLogEvent(), "sig-1", 1 ).rc;
+
+				expect( result.payment ).toInclude( "*** masked ***" );
+				expect( result.payment ).notToInclude( "nested-rc-secret" );
+				expect( result.payment ).toInclude( "Ada Lovelace", "unmasked neighbors stay readable" );
+				expect( result.calls ).notToInclude( "array-rc-secret" );
+				expect( result.calls ).toInclude( "/v1/pay" );
+			} );
+
+			it( "masks nested keys inside a JSON request body", function(){
+				makePublic( builder, "buildBody" );
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { user : { password : "deep-body-secret" }, orderId : 7 } )
+				} );
+
+				expect( body ).notToInclude( "deep-body-secret" );
+				expect( body ).toInclude( "masked" );
+				expect( body ).toInclude( "7" );
+			} );
+
+			it( "masks a JSON array request body", function(){
+				// A JSON array body used to skip masking entirely.
+				makePublic( builder, "buildBody" );
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( [ { apikey : "array-body-secret", id : 1 } ] )
+				} );
+
+				expect( body ).notToInclude( "array-body-secret" );
+				expect( body ).toInclude( "masked" );
+			} );
+
+			it( "masks keys matching a wildcard pattern when the exact lookup misses", function(){
+				settings.maskKeyPatterns = [ "*socialsecurity*" ];
+				var info = {
+					indemnitor1SocialSecurityNumber : "111-22-3333",
+					SOCIALSECURITYNUMBER            : "444-55-6666",
+					socialHandle                    : "@ada"
+				};
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).notToInclude( "111-22-3333" );
+				expect( payload.extraInfo ).notToInclude( "444-55-6666", "matching ignores case" );
+				expect( payload.extraInfo ).toInclude( "@ada", "a near-miss key must stay readable" );
+			} );
+
+			it( "treats a pattern without a wildcard as an exact match", function(){
+				settings.maskKeyPatterns = [ "client_secret" ];
+				var payload = builder.build(
+					newLogEvent( extraInfo = { client_secret : "oauth-secret", client_secret_hint : "keep me" } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo ).notToInclude( "oauth-secret" );
+				expect( payload.extraInfo ).toInclude( "keep me", "anchored matching must not become substring matching" );
+			} );
+
+			it( "applies wildcard patterns to the query string", function(){
+				makePublic( builder, "maskQueryString" );
+				settings.maskKeyPatterns = [ "*socialsecurity*" ];
+
+				expect( builder.maskQueryString( "applicantSocialSecurityNumber=123&id=4" ) )
+					.toBe( "applicantSocialSecurityNumber=*** masked ***&id=4" );
+			} );
+
+			it( "clips a long value and labels it with its real size", function(){
+				var info = structNew( "ordered" );
+				info[ "fileName" ]    = "contract.pdf";
+				info[ "fileContent" ] = repeatString( "A", 5000 );
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( "[truncated, 5000 chars total]" );
+				expect( payload.extraInfo ).toInclude( "contract.pdf", "siblings of a clipped value stay readable" );
+				expect( payload.extraInfo ).notToInclude(
+					repeatString( "A", 501 ),
+					"at most longValueMaxLength characters survive"
+				);
+			} );
+
+			it( "does not clip values under a longValueExemptKeys name", function(){
+				var info = { context : { stacktrace : repeatString( "z", 900 ) } };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "z", 900 ), "stack traces keep their frames" );
+			} );
+
+			it( "disables the per-value cap when longValueMaxLength is 0", function(){
+				settings.longValueMaxLength = 0;
+				var info = { bigField : repeatString( "B", 1500 ) };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "B", 1500 ), "only extraInfoMaxLength applies" );
+			} );
+
+			it( "caps a plain-string extraInfo at extraInfoMaxLength, not longValueMaxLength", function(){
+				var payload = builder.build( newLogEvent( extraInfo = repeatString( "m", 1200 ) ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "m", 1200 ) );
+			} );
+
+			it( "stops walking a very wide struct at the budget and reports the leftovers", function(){
+				var wide = structNew( "ordered" );
+				wide[ "apikey" ] = "early-secret";
+				for ( var i = 1; i <= 20000; i++ ) {
+					wide[ "field#i#" ] = "value #i#";
+				}
+
+				var payload = builder.build( newLogEvent( extraInfo = wide ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).notToInclude( "early-secret", "a masked key ahead of the cutoff is still masked" );
+				expect( payload.extraInfo ).toInclude( "more keys]", "the cutoff reports how much was left out" );
+			} );
+
+			it( "replaces content past the depth cap with a marker", function(){
+				var deep = { tail : "bottom" };
+				for ( var i = 1; i <= 6; i++ ) {
+					deep = { "level#i#" : deep };
+				}
+
+				var payload = builder.build( newLogEvent( extraInfo = deep ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( "[nested too deep]" );
+				expect( payload.extraInfo ).notToInclude( "bottom" );
+			} );
+
+			it( "passes queries and objects through the walk unchanged", function(){
+				var data    = queryNew( "id,name", "integer,varchar", [ [ 1, "Ada" ] ] );
+				var payload = builder.build(
+					newLogEvent( extraInfo = { result : data, note : "with a query" } ),
+					"sig-1",
+					1
+				);
+				expect( payload.extraInfo ).toInclude( "Ada", "query data keeps its diagnostic value" );
+
+				var withObject = builder.build(
+					newLogEvent( extraInfo = { helper : new coldbox.system.logging.LogLevels(), note : "with an object" } ),
+					"sig-1",
+					1
+				);
+				expect( withObject.extraInfo ).notToInclude(
+					"[object",
+					"objects go to the serializer untouched, not to a marker"
+				);
+			} );
+
+			it( "respects an extraInfoMaxLength override", function(){
+				settings.extraInfoMaxLength = 100;
+				var payload = builder.build(
+					newLogEvent( extraInfo = { note : repeatString( "n", 400 ) } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo.len() ).toBeLTE( 101, "100 characters plus the ellipsis" );
+			} );
+
+			it( "renders a null value as a placeholder instead of dropping the whole rc", function(){
+				/* A null rc value used to throw inside sanitizeScope's loop, and
+				 * buildRc's catch then discarded the entire rc table. */
+				makePublic( builder, "sanitizeValue" );
+				expect( builder.sanitizeValue( "anything" ) ).toBe( "[null]" );
 			} );
 
 			it( "captures the ColdBox event, routing detail, and the CGI subset", function(){

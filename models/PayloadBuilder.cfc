@@ -28,6 +28,25 @@ component singleton accessors="true" {
 		 * scanning them all on every alert would be wasted work. */
 		variables.MAX_SCAN_FRAMES = 100;
 
+		// The replacement text for a masked value.
+		variables.MASK_TOKEN = "*** masked ***";
+
+		/* How deep sanitizeNode() walks nested structs and arrays. Anything
+		 * deeper is unreadable in an email, and the cap also stops runaway
+		 * recursion on self-referencing structures. */
+		variables.MAX_DEPTH = 5;
+
+		/* Characters charged to the walk budget for each node visited, on top
+		 * of the content itself. Approximates the JSON punctuation each node
+		 * adds, and guarantees the character budget also bounds how many nodes
+		 * a very wide structure can spend before the walk stops. */
+		variables.NODE_OVERHEAD = 8;
+
+		/* Upper bound on memoized key verdicts when maskKeyPatterns is set, so
+		 * a payload full of unique key names cannot grow the cache without
+		 * limit. Real payloads repeat key names, so the cache stays tiny. */
+		variables.VERDICT_CACHE_MAX = 1000;
+
 		// The directory holding this file, e.g. ".../errorAlerts/models/".
 		var modelsPath           = getDirectoryFromPath( getCurrentTemplatePath() ).replace( "\", "/", "all" );
 		variables.ownModelsPath  = modelsPath;
@@ -83,7 +102,10 @@ component singleton accessors="true" {
 
 		// Add extraInfo only when it was not already added as an exception.
 		if ( settings.includeScopes.extraInfo && payload.exception.isEmpty() ) {
-			payload.extraInfo = stringify( sanitizeDeep( arguments.logEvent.getExtraInfo() ), 2000 );
+			payload.extraInfo = stringify(
+				sanitizeDeep( arguments.logEvent.getExtraInfo() ),
+				settingOr( "extraInfoMaxLength", 2000 )
+			);
 		}
 
 		return payload;
@@ -995,9 +1017,9 @@ component singleton accessors="true" {
 	 *
 	 * Form posts are skipped: their fields are already in the rc table, masked,
 	 * and repeating them raw here would print the same secrets unmasked. A JSON
-	 * body gets its top-level fields masked through sanitizeScope for the same
-	 * reason. Anything else is truncated plain text, and binary content shows
-	 * only its size.
+	 * body, object or array, gets its fields masked at any depth through
+	 * sanitizeNode for the same reason. Anything else is truncated plain text,
+	 * and binary content shows only its size.
 	 *
 	 * @httpData The struct from getHTTPRequestData( true ): headers plus content.
 	 */
@@ -1038,8 +1060,15 @@ component singleton accessors="true" {
 			if ( isJSON( content ) ) {
 				try {
 					var parsed = deserializeJSON( content );
-					if ( isStruct( parsed ) ) {
-						return truncate( serializeJSON( sanitizeScope( parsed ) ), settings.requestBodyMaxLength );
+					if ( isStruct( parsed ) || isArray( parsed ) ) {
+						ensureMaskConfig();
+						var cleanBody = sanitizeNode(
+							"",
+							parsed,
+							newSanitizeState( settings.requestBodyMaxLength, settingOr( "longValueMaxLength", 500 ) ),
+							0
+						);
+						return truncate( serializeJSON( cleanBody ), settings.requestBodyMaxLength );
 					}
 				} catch ( any e ) {
 				}
@@ -1203,7 +1232,7 @@ component singleton accessors="true" {
 
 			// A pair without "=" has no value to hide, so it passes through.
 			if ( pair.find( "=" ) && isMasked( decoded ) ) {
-				clean.append( "#name#=*** masked ***" );
+				clean.append( "#name#=#variables.MASK_TOKEN#" );
 			} else {
 				clean.append( pair );
 			}
@@ -1215,16 +1244,51 @@ component singleton accessors="true" {
 	/**
 	 * isMasked
 	 *
-	 * True when a field name appears in settings.maskKeys. The comparison is an
-	 * exact match apart from case, so each field an application wants hidden must
-	 * be named in the list. Partial matching was deliberately avoided: it hid
-	 * fields nobody asked to hide, such as `tokenCount`, which made a value
-	 * disappear from a diagnostic email for no reason.
+	 * True when a field name should be hidden. The settings.maskKeys comparison
+	 * is an exact match apart from case, so each field an application wants
+	 * hidden must be named in the list. Partial matching was deliberately
+	 * avoided: it hid fields nobody asked to hide, such as `tokenCount`, which
+	 * made a value disappear from a diagnostic email for no reason. An
+	 * application that needs broader matching opts in per pattern through
+	 * settings.maskKeyPatterns, checked only when the exact lookup misses.
+	 *
+	 * The exact check is one hash lookup, so the length of maskKeys does not
+	 * matter. Pattern verdicts are memoized per key name, because payloads
+	 * repeat the same keys - an array of structs most of all - and a regex
+	 * test per pattern per node would otherwise dominate the walk.
 	 *
 	 * @key The field name to test.
 	 */
 	private boolean function isMasked( required string key ){
-		return settings.maskKeys.findNoCase( arguments.key ) > 0;
+		if ( !arguments.key.len() ) {
+			return false;
+		}
+		if ( !structKeyExists( variables, "maskCompiled" ) ) {
+			ensureMaskConfig();
+		}
+
+		var compiled = variables.maskCompiled;
+		if ( structKeyExists( compiled.exactLookup, arguments.key ) ) {
+			return true;
+		}
+		if ( !compiled.keyPatterns.len() ) {
+			return false;
+		}
+		if ( structKeyExists( compiled.verdictCache, arguments.key ) ) {
+			return compiled.verdictCache[ arguments.key ];
+		}
+
+		var masked = false;
+		for ( var pattern in compiled.keyPatterns ) {
+			if ( reFindNoCase( pattern, arguments.key ) ) {
+				masked = true;
+				break;
+			}
+		}
+		if ( structCount( compiled.verdictCache ) < variables.VERDICT_CACHE_MAX ) {
+			compiled.verdictCache[ arguments.key ] = masked;
+		}
+		return masked;
 	}
 
 	/**
@@ -1262,29 +1326,34 @@ component singleton accessors="true" {
 	 *
 	 * Masks a sensitive key or converts its value to a limited string.
 	 *
-	 * The key must match an entry in settings.maskKeys exactly, ignoring case.
-	 * A field is masked only when the application listed it, so a name like
-	 * `newPassword` is NOT covered by the entry `password` and has to be added
-	 * on its own. The check happens before any conversion so a secret is never
-	 * serialized into email.
+	 * The key must match an entry in settings.maskKeys exactly, ignoring case,
+	 * or one of the settings.maskKeyPatterns wildcards. A field is masked only
+	 * when the application asked for it, so a name like `newPassword` is NOT
+	 * covered by the entry `password` and has to be added on its own. The check
+	 * happens before any conversion so a secret is never serialized into email.
 	 *
-	 * @key   The scope key, checked against settings.maskKeys.
-	 * @value The value to sanitize, any type.
+	 * A complex value is walked through sanitizeNode() first, so a masked key
+	 * nested anywhere inside it is replaced before the value is serialized for
+	 * the rc table. A null value renders as a placeholder instead of throwing,
+	 * which used to empty the whole rc table through buildRc's catch.
+	 *
+	 * @key   The scope key, checked against the masking configuration.
+	 * @value The value to sanitize, any type, may be null.
 	 */
-	private string function sanitizeValue( required string key, required any value ){
-		if ( isMasked( arguments.key ) ) {
-			return "*** masked ***";
-		}
+	private string function sanitizeValue( required string key, any value ){
+		ensureMaskConfig();
 
-		if ( isBinary( arguments.value ) ) {
-			return "[binary, #len( arguments.value )# bytes]";
-		}
-
-		if ( isSimpleValue( arguments.value ) ) {
-			return truncate( toString( arguments.value ), settings.rcValueMaxLength );
+		if ( isNull( arguments.value ) ) {
+			return "[null]";
 		}
 
 		if ( isObject( arguments.value ) ) {
+			/* Checked before the walk: many object types report isStruct()
+			 * true, and walking a CFC would dump its internals. The mask
+			 * check still runs first so a masked object stays hidden. */
+			if ( isMasked( arguments.key ) ) {
+				return variables.MASK_TOKEN;
+			}
 			try {
 				return "[object #getMetadata( arguments.value ).name#]";
 			} catch ( any e ) {
@@ -1292,15 +1361,26 @@ component singleton accessors="true" {
 			}
 		}
 
-		return truncate( stringify( arguments.value, settings.rcValueMaxLength ), settings.rcValueMaxLength );
+		var clean = sanitizeNode(
+			arguments.key,
+			arguments.value,
+			newSanitizeState( settings.rcValueMaxLength, settings.rcValueMaxLength ),
+			0
+		);
+
+		/* A simple result already carries its truncation label; stringify()
+		 * would clip the label off again. Only a walked container still needs
+		 * serializing, because the rc table holds flat strings. */
+		return isSimpleValue( clean ) ? clean : stringify( clean, settings.rcValueMaxLength );
 	}
 
 	/**
 	 * sanitizeDeep
 	 *
-	 * Returns a copy of a value with every key named in settings.maskKeys
-	 * replaced, at any nesting depth. Structs and arrays are walked. Any other
-	 * value is returned as it is, so the caller's own length limit still applies.
+	 * Returns a copy of a value with every key named in settings.maskKeys or
+	 * matched by settings.maskKeyPatterns replaced, at any nesting depth.
+	 * Structs and arrays are walked. Objects and queries are returned as they
+	 * are, so the caller's serializer and length cap still handle them.
 	 *
 	 * This is needed because ColdBox's RestHandler passes getHTTPRequestData()
 	 * into extraInfo, which puts the Authorization header into the email.
@@ -1308,47 +1388,290 @@ component singleton accessors="true" {
 	 * there only covers the Request section, and this value arrives through
 	 * extraInfo instead.
 	 *
-	 * Values are not truncated here. sanitizeValue() clips every value to
-	 * rcValueMaxLength, which would cut a stack trace down to nothing, so this
-	 * method only masks and lets the caller's stringify() cap the whole result.
+	 * The walk collects at most extraInfoMaxLength characters of content,
+	 * because the caller clips the serialized result to that same length and
+	 * any work past it would be thrown away. That budget is what keeps a
+	 * multi-megabyte payload from being copied and serialized in full. String
+	 * values clip to longValueMaxLength each; keys in longValueExemptKeys,
+	 * stack traces above all, keep the whole-output cap instead.
 	 *
-	 * A failure returns a placeholder instead of the original value, so an error
-	 * while sanitizing can never print a secret.
+	 * A failure returns a placeholder instead of the original value, so an
+	 * error while sanitizing can never print a secret.
 	 *
 	 * @value The value to sanitize, any type.
-	 * @depth The current nesting level. Deep or looping structures stop at 5.
 	 */
-	private any function sanitizeDeep( required any value, numeric depth = 0 ){
+	private any function sanitizeDeep( required any value ){
+		ensureMaskConfig();
+		return sanitizeNode(
+			"",
+			arguments.value,
+			newSanitizeState( settingOr( "extraInfoMaxLength", 2000 ), settingOr( "longValueMaxLength", 500 ) ),
+			0
+		);
+	}
+
+	/**
+	 * sanitizeNode
+	 *
+	 * Recursively converts one value into email-safe content. A masked key
+	 * becomes the mask token before its value is even read, so a secret is
+	 * never converted or serialized. Simple values are capped through
+	 * sanitizeString(). Structs and arrays are walked until the depth cap or
+	 * the shared budget runs out; past that point the walker reports how many
+	 * entries were left out instead of visiting them, so a cutoff can only
+	 * omit content, never leak it. Objects, queries, and any other value that
+	 * is not a plain struct or array pass through unchanged, exactly as
+	 * sanitizeDeep() always treated them, and the caller's serializer takes
+	 * over from there.
+	 *
+	 * A failure at any node returns a placeholder for that node only, so an
+	 * error while sanitizing can never print a secret and never costs the
+	 * sibling values.
+	 *
+	 * @keyName The key this value sits under; "" for roots and array items.
+	 * @value   The value to sanitize, any type, may be null.
+	 * @state   The shared walk state from newSanitizeState().
+	 * @depth   The current nesting level, capped at MAX_DEPTH.
+	 */
+	private any function sanitizeNode(
+		required string keyName,
+		any value,
+		required struct state,
+		numeric depth = 0
+	){
 		try {
-			if ( arguments.depth > 5 ) {
+			if ( arguments.depth > variables.MAX_DEPTH ) {
 				return "[nested too deep]";
+			}
+			if ( arguments.state.remaining <= 0 ) {
+				return "[omitted, size limit]";
+			}
+			if ( variables.maskCompiled.hasMaskConfig && isMasked( arguments.keyName ) ) {
+				arguments.state.remaining -= arguments.keyName.len() + variables.MASK_TOKEN.len() + variables.NODE_OVERHEAD;
+				return variables.MASK_TOKEN;
+			}
+			if ( isNull( arguments.value ) ) {
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
+				return "[null]";
+			}
+			if ( isBinary( arguments.value ) ) {
+				arguments.state.remaining -= arguments.keyName.len() + 24 + variables.NODE_OVERHEAD;
+				return "[binary, #len( arguments.value )# bytes]";
+			}
+			if ( isSimpleValue( arguments.value ) ) {
+				return sanitizeString( arguments.keyName, toString( arguments.value ), arguments.state, arguments.depth );
 			}
 
 			if ( isArray( arguments.value ) ) {
-				var cleanList = [];
-				for ( var item in arguments.value ) {
-					cleanList.append( sanitizeDeep( item, arguments.depth + 1 ) );
+				var cleanList  = [];
+				var totalItems = arguments.value.len();
+				for ( var i = 1; i <= totalItems; i++ ) {
+					if ( arguments.state.remaining <= 0 ) {
+						cleanList.append( "[#totalItems - i + 1# more items]" );
+						break;
+					}
+					cleanList.append(
+						!arrayIsDefined( arguments.value, i )
+						 ? "[null]"
+						 : sanitizeNode( "", arguments.value[ i ], arguments.state, arguments.depth + 1 )
+					);
 				}
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
 				return cleanList;
 			}
 
-			// isStruct() is true for many object types, so check isObject()
-			// first and leave objects alone rather than trying to walk them.
+			/* isStruct() is true for many object types, so check isObject()
+			 * first and leave objects alone rather than trying to walk them.
+			 * Queries, XML, and anything else that is not a plain struct pass
+			 * through unchanged too: they can carry real diagnostic detail,
+			 * and the caller's final truncate caps whatever they serialize to. */
 			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
 				return arguments.value;
 			}
 
-			var clean = structNew( "ordered" );
+			var clean     = structNew( "ordered" );
+			var totalKeys = structCount( arguments.value );
+			var visited   = 0;
 			for ( var key in arguments.value ) {
-				clean[ key ] = isMasked( key ) ? "*** masked ***" : sanitizeDeep(
-					arguments.value[ key ],
-					arguments.depth + 1
-				);
+				if ( arguments.state.remaining <= 0 ) {
+					clean[ "..." ] = "[#totalKeys - visited# more keys]";
+					break;
+				}
+				visited++;
+				/* A pathological key is display-truncated; the mask check in
+				 * the recursive call always sees the full name. */
+				var displayKey = key.len() > 200 ? key.left( 197 ) & "…" : key;
+				clean[ displayKey ] = isNull( arguments.value[ key ] )
+				 ? "[null]"
+				 : sanitizeNode( key, arguments.value[ key ], arguments.state, arguments.depth + 1 );
 			}
+			arguments.state.remaining -= variables.NODE_OVERHEAD;
 			return clean;
 		} catch ( any e ) {
 			return "[value could not be sanitized]";
 		}
+	}
+
+	/**
+	 * sanitizeString
+	 *
+	 * Caps one simple value and charges it to the walk budget. Values under an
+	 * exempt key, values at the root of a pass, and every value when the
+	 * per-value cap is disabled all cap at the whole-output size instead, so a
+	 * stack trace keeps its frames while a base64 blob buried in a payload
+	 * keeps only enough of a prefix to identify it. A clipped value ends with
+	 * a label stating its real size, which for an oversized value is often the
+	 * diagnostic fact that matters.
+	 *
+	 * len() and left() bound the work: a multi-megabyte string costs one
+	 * length read and one copy of at most the cap, never a full pass.
+	 *
+	 * @keyName The key the value sits under, used for the exemption lookup.
+	 * @text    The value as a string.
+	 * @state   The shared walk state from newSanitizeState().
+	 * @depth   The current nesting level; 0 means the root of the pass.
+	 */
+	private string function sanitizeString(
+		required string keyName,
+		required string text,
+		required struct state,
+		required numeric depth
+	){
+		var totalLength = arguments.text.len();
+		var isExempt    = arguments.keyName.len()
+			&& structKeyExists( variables.maskCompiled.exemptLookup, arguments.keyName );
+		var cap = ( isExempt || arguments.depth == 0 || arguments.state.valueCap == 0 )
+			? arguments.state.contextCap
+			: arguments.state.valueCap;
+
+		var kept = arguments.text;
+		if ( totalLength > cap ) {
+			kept = arguments.text.left( cap ) & "… [truncated, #totalLength# chars total]";
+		}
+
+		arguments.state.remaining -= arguments.keyName.len() + kept.len() + variables.NODE_OVERHEAD;
+		return kept;
+	}
+
+	/**
+	 * newSanitizeState
+	 *
+	 * Builds the mutable state one sanitize pass shares across its recursion.
+	 * Structs pass by reference in CFML, so every nesting level draws down the
+	 * same budget.
+	 *
+	 * @budget   Total characters this pass may collect. Matches the caller's
+	 *           final output cap: serializing only adds characters, so
+	 *           collecting this much guarantees the final clip is reached.
+	 * @valueCap Per-value cap for simple values, from longValueMaxLength.
+	 */
+	private struct function newSanitizeState( required numeric budget, required numeric valueCap ){
+		return {
+			remaining  : arguments.budget,
+			contextCap : arguments.budget,
+			valueCap   : arguments.valueCap
+		};
+	}
+
+	/**
+	 * ensureMaskConfig
+	 *
+	 * Compiles the masking configuration into variables.maskCompiled when it
+	 * has not been built yet or when the settings changed since the last
+	 * compile. Called once per sanitize entry point, never per node. Unit
+	 * specs swap and mutate the settings struct between tests, which is why
+	 * the fingerprint recheck exists; in production the settings never change,
+	 * so this is three short string joins per alert. A concurrent
+	 * double-compile assigns the same result twice, which is harmless.
+	 */
+	private void function ensureMaskConfig(){
+		var fingerprint = settingOr( "maskKeys", [] ).toList( "|" )
+			& "##" & settingOr( "maskKeyPatterns", [] ).toList( "|" )
+			& "##" & settingOr( "longValueExemptKeys", [] ).toList( "|" );
+
+		if (
+			!structKeyExists( variables, "maskCompiled" )
+			|| variables.maskCompiled.fingerprint != fingerprint
+		) {
+			variables.maskCompiled = compileMaskConfig( fingerprint );
+		}
+	}
+
+	/**
+	 * compileMaskConfig
+	 *
+	 * Builds the compiled lookup state the sanitizer reads on every node:
+	 *
+	 * - exactLookup: a struct keyed by every maskKeys entry. CFML string-keyed
+	 *   structs compare keys ignoring case, which turns the exact match into
+	 *   one hash check regardless of list length.
+	 * - keyPatterns: every maskKeyPatterns entry translated to an anchored
+	 *   regex, compiled here once instead of per key comparison.
+	 * - exemptLookup: a struct keyed by every longValueExemptKeys entry.
+	 * - verdictCache: memoized isMasked() pattern verdicts per key name.
+	 * - hasMaskConfig: false when both lists are empty, so the walker can
+	 *   skip the mask check entirely at the default configuration.
+	 *
+	 * @fingerprint The fingerprint string identifying this configuration.
+	 */
+	private struct function compileMaskConfig( required string fingerprint ){
+		var compiled = {
+			fingerprint   : arguments.fingerprint,
+			exactLookup   : {},
+			keyPatterns   : [],
+			exemptLookup  : {},
+			verdictCache  : {},
+			hasMaskConfig : false
+		};
+
+		for ( var key in settingOr( "maskKeys", [] ) ) {
+			if ( key.len() ) {
+				compiled.exactLookup[ key ] = true;
+			}
+		}
+		for ( var pattern in settingOr( "maskKeyPatterns", [] ) ) {
+			if ( pattern.len() ) {
+				compiled.keyPatterns.append( wildcardToRegex( pattern ) );
+			}
+		}
+		for ( var exempt in settingOr( "longValueExemptKeys", [] ) ) {
+			if ( exempt.len() ) {
+				compiled.exemptLookup[ exempt ] = true;
+			}
+		}
+		compiled.hasMaskConfig = structCount( compiled.exactLookup ) > 0 || compiled.keyPatterns.len() > 0;
+
+		return compiled;
+	}
+
+	/**
+	 * wildcardToRegex
+	 *
+	 * Translates a * wildcard pattern into an anchored regex. Every regex
+	 * special character except * is escaped, then each * becomes ".*", so
+	 * "*socialsecurity*" matches any key containing that text and a pattern
+	 * with no * behaves as an exact match.
+	 *
+	 * @pattern The wildcard pattern from settings.maskKeyPatterns.
+	 */
+	private string function wildcardToRegex( required string pattern ){
+		var escaped = reReplace( arguments.pattern, "([\\\.\[\]\(\)\+\?\^\$\|\{\}])", "\\\1", "all" );
+		return "^" & escaped.replace( "*", ".*", "all" ) & "$";
+	}
+
+	/**
+	 * settingOr
+	 *
+	 * Reads a module setting, falling back to a default when the key is
+	 * absent. Keeps the module working when a host app or an old test fixture
+	 * predates a newly added setting.
+	 *
+	 * @name         The settings key to read.
+	 * @defaultValue The value to use when the key is missing.
+	 */
+	private any function settingOr( required string name, required any defaultValue ){
+		return structKeyExists( settings, arguments.name ) ? settings[ arguments.name ] : arguments.defaultValue;
 	}
 
 	/**
