@@ -21,9 +21,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was serialized into the email in full while a top-level `cardNumber` was
   masked. JSON **array** request bodies, which previously skipped masking
   entirely, are walked too.
+- A JSON request body is no longer printed raw when the sanitizer cannot walk
+  it. `isJSON()` accepts text that `deserializeJSON()` then rejects, and the
+  failure fell through to printing the body verbatim, so a body containing a
+  masked field name could reach the email unmasked. The same fall-through
+  applied to a body that parsed to a bare string or number. Both now report the
+  body by size instead. A body that is not JSON at all still prints as sent:
+  there are no field names to match, and the README lists that under "What key
+  masking can never reach".
 
 ### Fixed
 
+- **A partial nested setting no longer stops every alert.** ColdBox merges
+  module settings one level deep, so an application that wrote
+  `includeScopes : { session : true }` lost `rc`, `cgi` and `extraInfo` from the
+  struct. `PayloadBuilder.build()` threw while reading them, `CaptureService`
+  swallowed the failure, and the application silently received no alerts at all
+  - one line on System.err was the only sign. A partial `throttle` did the same
+  and additionally made throttling fail open. The module now puts the missing
+  keys of `throttle` and `includeScopes` back at startup, so overriding one key
+  and leaving the rest alone works as expected. Applications that always wrote
+  both structs in full are unaffected.
+- A JSON request body larger than 2 MB is reported by size instead of parsed.
+  `deserializeJSON()` had to build the whole object graph before the
+  budget-bounded walk could start, which allocated several times the body's
+  size inside error handling on a server that was already in trouble.
+- Query-string masking could use the masking configuration compiled for a
+  previous alert. The query string is the first thing an alert masks, and the
+  configuration was only recompiled once a later step noticed a settings
+  change. Settings do not change in production, so this showed up as
+  order-dependent test results rather than a live fault.
 - One value the engine's JSON serializer refuses no longer discards the whole
   section it sits in. `extraInfo` is serialized as a unit, so a single value
   that failed used to replace everything with `[unserializable value]`, losing
@@ -60,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produce 2,000 characters of email; it now costs a bounded copy. Very wide
   structures stop early and report `[N more keys]` in place of the rest. A
   cutoff can only omit content, never bypass masking.
+- The masking configuration is compiled once per alert rather than once per
+  `rc` key and once per header. Each compile rebuilt a fingerprint from three
+  list joins, so a wide `rc` paid for the same work dozens of times over.
 - Long simple values in the `rc` table now end with the size label instead of a
   bare ellipsis.
 - A null `rc` value now renders `[null]`. Before this it threw inside the

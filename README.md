@@ -328,7 +328,11 @@ This is also what keeps alert building fast. The sanitizer stops collecting once
 
 ### What key masking can never reach
 
-Some content carries no field name to match against: the bound query parameter values shown by `includeQueryParams`, an exception's `detail` and `extendedInfo`, and secrets embedded inside plain string values, such as an OAuth token inside a JSON string a gateway stored in one field. Key masking cannot see into any of those. Do not put secrets in them; where a logging call site passes such a value, change the call site. Long-value truncation clips huge strings by default, which narrows this exposure but does not close it.
+Some content carries no field name to match against: the bound query parameter values shown by `includeQueryParams`, an exception's `detail` and `extendedInfo`, a request body that is not JSON, and secrets embedded inside plain string values, such as an OAuth token inside a JSON string a gateway stored in one field. Key masking cannot see into any of those. Do not put secrets in them; where a logging call site passes such a value, change the call site. Long-value truncation clips huge strings by default, which narrows this exposure but does not close it.
+
+The non-JSON body is the one worth spelling out, because `includeRequestBody` exists to show it. An XML or plain-text body has no field names, so it is printed as sent, up to `requestBodyMaxLength`. A body the engine recognizes as JSON is different: it is always either walked and masked, or reported by size. It is never printed raw, not when it is too large to parse safely, not when parsing fails, and not when it turns out to be a bare string or number.
+
+"Recognizes as JSON" is doing real work in that sentence. Engines disagree about what counts: Adobe ColdFusion 2023 rejects a trailing comma that Lucee 5 and BoxLang both accept. Malformed JSON is therefore treated as a plain-text body on some engines and printed as sent. If your endpoints receive secrets in the body, `includeRequestBody` is the setting to leave off.
 
 ### Objects passed as `extraInfo`
 
@@ -374,6 +378,18 @@ The `rc` table is the one place that differs: it shows `[object com.foo.Bar]` in
 
 The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstrap" ]`.
 
+Two settings are structs rather than simple values: `throttle` and `includeScopes`. ColdBox merges module settings one level deep, so writing `includeScopes : { session : true }` replaces the whole struct instead of adding to it. The module puts the missing keys back at startup, so you can override one key and leave the rest alone:
+
+```cfc
+moduleSettings = {
+    errorAlerts : {
+        to            : "dev@example.com",
+        includeScopes : { session : true },   // rc, cgi and extraInfo keep their defaults
+        throttle      : { windowSeconds : 60 } // maxPerWindow and maxTrackedSignatures keep theirs
+    }
+};
+```
+
 ### Advanced settings
 
 | Setting | Default | Description |
@@ -396,7 +412,7 @@ The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstra
 | `maskQueryString` | `true` | Apply `maskKeys` and `maskKeyPatterns` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
 | `emptyValueText` | `"N/A"` | Placeholder shown for a request value the request did not provide. |
 | `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section, matched ignoring case. `Cookie` and `Authorization` are never included, even when listed. |
-| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their fields masked at any depth; form posts are skipped because `rc` already shows them masked. |
+| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their fields masked at any depth, and a JSON body that cannot be walked is reported by size instead of printed. Form posts are skipped because `rc` already shows them masked. A body that is not JSON has no field names to match, so it is shown as sent. |
 | `requestBodyMaxLength` | `4000` | Maximum characters of request body shown. |
 | `maskKeys` | `[]` | Field names whose values are replaced with `*** masked ***` wherever they appear: `rc` keys, JSON body fields, and `extraInfo` keys, all at any nesting depth stopping at five levels, plus query-string field names. Matching is exact, ignoring case. Empty by default: masking is opt-in. |
 | `maskKeyPatterns` | `[]` | Wildcard field-name patterns, checked only when the exact `maskKeys` lookup misses. `*` matches any run of characters; matching ignores case and covers the whole name. |

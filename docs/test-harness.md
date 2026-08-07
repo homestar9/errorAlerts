@@ -116,6 +116,18 @@ run:
   500 KB body runs before the walk and is unavoidable. The heavy mask
   configurations now cost less than the unmasked runs did, because the walk
   stops as soon as the email's budget is full.
+- **Compiling the mask configuration once per alert removed the wide-`rc` cost.**
+  `ensureMaskConfig()` used to run once per `rc` key and once per header, and
+  each call rebuilt a fingerprint from three list joins. Scenario (d), an `rc`
+  with 100 keys, went from min 7 ms / avg 10 ms to min 2-4 ms / avg 4 ms.
+
+  Read the numbers above as a comparison, not as absolute figures for your
+  machine. Timings on a developer laptop move by a factor of three between runs
+  depending on JIT warm-up and what else is running, and the 500 KB JSON
+  scenario is the worst of them: it was measured at 18 ms and at 71 ms within
+  the same five-run batch. Compare a before and an after taken back to back on
+  one machine, in the same JVM, after two warm-up runs. Anything else is
+  measuring the laptop.
 - **A REST handler failure alerted twice before 2.4.0.** `/api/boom` produced two
   emails. `RestHandler.aroundHandler()` catches whatever the action throws and
   calls `onAnyOtherException()`, which logs at ERROR under the `handlers.Api`

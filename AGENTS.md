@@ -69,6 +69,22 @@ page and how to send its alert emails to a local SMTP server so you can read the
   (`extraInfoMaxLength`, `requestBodyMaxLength`, `rcValueMaxLength`) can display. A cutoff may omit
   content but must never emit a value that skipped the mask check.
 - The mask token `*** masked ***` is deliberately not configurable.
+- `throttle` and `includeScopes` are the only settings that are structs. ColdBox merges module
+  settings one level deep, so a partial override arrives missing its other keys and every unguarded
+  `settings.throttle.x` read throws inside `CaptureService`'s catch, which silently sends nothing.
+  `ModuleConfig.applyNestedDefaults()` puts the missing keys back at load. Any new struct-valued
+  setting must be added to `nestedDefaults()` in the same commit. The harness config sets a
+  deliberately partial `includeScopes` so a regression fails the integration specs immediately.
+- A request body `isJSON()` accepts is never printed raw. If it cannot be walked - over
+  `MAX_PARSE_CHARS`, a parse failure, or a bare scalar - it is reported by size. Anything else has no
+  field names to match and prints as sent; that limit is documented in the README rather than hidden.
+  `parseJson()` exists as a separate method for the same reason `toJson()` does: engines disagree on
+  what `isJSON()` accepts (Adobe rejects a trailing comma Lucee and BoxLang accept), so no literal
+  body text reaches the failure paths everywhere. Force those paths through the seam, never with
+  malformed text.
+- `build()` calls `ensureMaskConfig()` once per alert; everything downstream uses `ensureCompiled()`,
+  which only compiles when nothing has been compiled yet. Do not put the fingerprint check back on a
+  per-key path - it made a wide `rc` rebuild the fingerprint once per key.
 - Objects and queries pass through the walk untouched by design, so keys inside them are never
   mask-checked. Do not "fix" this by calling `getMemento()`: on a Quick or cborm entity that method
   can run database queries through relationships, recurse without a depth cap, and throw, none of
