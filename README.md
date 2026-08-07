@@ -350,7 +350,7 @@ logger.error( "Charge failed", {
 } );
 ```
 
-The module deliberately never calls `getMemento()` on an object to get a safer view. On a Quick or cborm entity that method can run database queries through its relationships, recurse an object graph without a depth limit, and throw — none of which belongs inside error handling.
+The module deliberately never calls `getMemento()` to get a tidier view of an object. On a Quick or cborm entity, that method can run database queries through its relationships, recurse an object graph with no depth limit, and throw. None of those belong inside error handling.
 
 The `rc` table is the one place that differs: it shows `[object com.foo.Bar]` instead of the contents, because that table renders short strings capped at `rcValueMaxLength`. That is a rendering limit, not a masking decision.
 
