@@ -1679,6 +1679,11 @@ component singleton accessors="true" {
 	 *
 	 * Converts a value to a limited string without throwing.
 	 *
+	 * When the value as a whole cannot be converted, the struct is retried one
+	 * key at a time. Some values reach here untouched, an object most of all,
+	 * and a single one the engine's serializer refuses used to discard the
+	 * entire section along with every other key the application logged.
+	 *
 	 * @value     The value to serialize, any type.
 	 * @maxLength The maximum length of the returned string.
 	 */
@@ -1687,10 +1692,85 @@ component singleton accessors="true" {
 			if ( isSimpleValue( arguments.value ) ) {
 				return truncate( toString( arguments.value ), arguments.maxLength );
 			}
-			return truncate( serializeJSON( arguments.value ), arguments.maxLength );
+			return truncate( toJson( arguments.value ), arguments.maxLength );
+		} catch ( any e ) {
+			return truncate( salvageStruct( arguments.value ), arguments.maxLength );
+		}
+	}
+
+	/**
+	 * salvageStruct
+	 *
+	 * Rebuilds the JSON for a struct one key at a time, after converting the
+	 * whole struct already failed. Keys that convert keep their content, and a
+	 * key that cannot be converted is replaced by a marker naming what was
+	 * lost. A value that is not a plain struct, and a struct that still cannot
+	 * be assembled, fall back to the original placeholder so this can only
+	 * improve on the previous behavior.
+	 *
+	 * @value The value whose conversion failed.
+	 */
+	private string function salvageStruct( required any value ){
+		try {
+			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
+				return "[unserializable value]";
+			}
+
+			var pairs = [];
+			for ( var key in arguments.value ) {
+				// The key is serialized too, so whatever it contains, the
+				// assembled text stays valid JSON.
+				pairs.append( toJson( key ) & ":" & jsonOrMarker( arguments.value[ key ] ) );
+			}
+			return "{" & pairs.toList( "," ) & "}";
 		} catch ( any e ) {
 			return "[unserializable value]";
 		}
+	}
+
+	/**
+	 * jsonOrMarker
+	 *
+	 * Returns one value as JSON, or as a marker naming what could not be
+	 * converted. An object reports its type, because knowing which class the
+	 * alert could not print is the useful part of the report.
+	 *
+	 * @value The value to convert, any type, may be null.
+	 */
+	private string function jsonOrMarker( any value ){
+		if ( isNull( arguments.value ) ) {
+			return toJson( "[null]" );
+		}
+
+		try {
+			return toJson( arguments.value );
+		} catch ( any e ) {
+			// Fall through to a marker below; this value is the reason the
+			// whole struct could not be converted.
+		}
+
+		if ( isObject( arguments.value ) ) {
+			try {
+				return toJson( "[object #getMetadata( arguments.value ).name#: could not be serialized]" );
+			} catch ( any e ) {
+				// The type name is unavailable, so report it without one.
+			}
+		}
+
+		return toJson( "[value could not be serialized]" );
+	}
+
+	/**
+	 * toJson
+	 *
+	 * Serializes one value. This is its own method so tests can exercise the
+	 * failure path directly, rather than depending on a particular engine's
+	 * serializer refusing a particular value.
+	 *
+	 * @value The value to serialize, any type.
+	 */
+	private string function toJson( required any value ){
+		return serializeJSON( arguments.value );
 	}
 
 	/**

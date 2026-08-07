@@ -69,6 +69,14 @@ page and how to send its alert emails to a local SMTP server so you can read the
   (`extraInfoMaxLength`, `requestBodyMaxLength`, `rcValueMaxLength`) can display. A cutoff may omit
   content but must never emit a value that skipped the mask check.
 - The mask token `*** masked ***` is deliberately not configurable.
+- Objects and queries pass through the walk untouched by design, so keys inside them are never
+  mask-checked. Do not "fix" this by calling `getMemento()`: on a Quick or cborm entity that method
+  can run database queries through relationships, recurse without a depth cap, and throw, none of
+  which is acceptable inside error handling. The `rc` table's `[object com.foo.Bar]` marker is a
+  rendering limit for a short-string column, not a different masking policy.
+- `stringify()` retries a struct key by key when serializing it as a whole fails, so one value the
+  engine refuses cannot discard the entire section. `toJson()` exists as a separate method purely so
+  specs can force that failure without depending on an engine-specific unserializable value.
 - `test-harness/tests/specs/perf/PayloadBuilderBenchmarkTest.cfc` times alert building against large
   payloads (`?directory=tests.specs.perf`). Run it before and after touching PayloadBuilder's
   sanitize path and compare against the numbers in the relevant commit messages.

@@ -330,6 +330,30 @@ This is also what keeps alert building fast. The sanitizer stops collecting once
 
 Some content carries no field name to match against: the bound query parameter values shown by `includeQueryParams`, an exception's `detail` and `extendedInfo`, and secrets embedded inside plain string values, such as an OAuth token inside a JSON string a gateway stored in one field. Key masking cannot see into any of those. Do not put secrets in them; where a logging call site passes such a value, change the call site. Long-value truncation clips huge strings by default, which narrows this exposure but does not close it.
 
+### Objects passed as `extraInfo`
+
+The sanitizer opens two kinds of containers: plain structs and arrays. A component instance is neither, so it is handed to the JSON serializer exactly as received. Its internal data is printed, and **no key inside it is checked against `maskKeys`**, because the sanitizer never opened it. A gateway component holding a cached token in its variables scope would print that token.
+
+Queries behave the same way and that is usually what you want, since the rows are the diagnostic. Objects are less useful: what you get is often framework plumbing rather than your data, and an object with a very large internal graph makes the serializer work hard before the email is even assembled.
+
+The fix belongs at the logging call site. Log the values you need, not the whole object:
+
+```cfc
+// Prints the component's internals, unmasked.
+logger.error( "Charge failed", { gateway : paymentGateway } );
+
+// Prints what you actually want to read, and maskKeys applies.
+logger.error( "Charge failed", {
+    gateway    : "AcmePay",
+    statusCode : response.statusCode,
+    orderId    : order.getId()
+} );
+```
+
+The module deliberately never calls `getMemento()` on an object to get a safer view. On a Quick or cborm entity that method can run database queries through its relationships, recurse an object graph without a depth limit, and throw — none of which belongs inside error handling.
+
+The `rc` table is the one place that differs: it shows `[object com.foo.Bar]` instead of the contents, because that table renders short strings capped at `rcValueMaxLength`. That is a rendering limit, not a masking decision.
+
 ## Configuration reference
 
 ### Common settings

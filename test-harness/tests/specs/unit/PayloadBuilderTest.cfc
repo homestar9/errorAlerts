@@ -319,6 +319,48 @@ component extends="tests.resources.BaseUnitSpec" {
 				);
 			} );
 
+			it( "keeps the other keys when one value cannot be serialized", function(){
+				/* A value the engine's serializer refuses used to discard the
+				 * whole section, losing every other key the application
+				 * logged. A real example is a java.lang.Thread passed as
+				 * context, which overflows Lucee's serializer. The refusal is
+				 * simulated here so the spec runs fast and behaves the same on
+				 * every engine. */
+				makePublic( builder, "stringify" );
+				makePublic( builder, "toJson" );
+				builder.$( "toJson" ).$callback( function( value ){
+					var text = serializeJSON( arguments.value );
+					if ( text.findNoCase( "EXPLODE" ) ) {
+						throw( type = "SerializerBoom", message = "this value cannot be serialized" );
+					}
+					return text;
+				} );
+
+				var info = structNew( "ordered" );
+				info[ "orderId" ]  = "keep-me-visible";
+				info[ "resource" ] = "EXPLODE";
+
+				var result = builder.stringify( info, 2000 );
+
+				expect( result ).toInclude( "keep-me-visible", "a readable sibling key must not be lost" );
+				expect( result ).toInclude( "could not be serialized", "the failing key reports what was lost" );
+				expect( result ).notToInclude(
+					"[unserializable value]",
+					"one bad value must not discard the whole section"
+				);
+				expect( isJSON( result ) ).toBeTrue( "the rebuilt text must still be valid JSON" );
+			} );
+
+			it( "falls back to the placeholder when nothing can be salvaged", function(){
+				makePublic( builder, "stringify" );
+				makePublic( builder, "toJson" );
+				builder.$( "toJson" ).$callback( function( value ){
+					throw( type = "SerializerBoom", message = "nothing serializes here" );
+				} );
+
+				expect( builder.stringify( { orderId : 1 }, 2000 ) ).toBe( "[unserializable value]" );
+			} );
+
 			it( "respects an extraInfoMaxLength override", function(){
 				settings.extraInfoMaxLength = 100;
 				var payload = builder.build(

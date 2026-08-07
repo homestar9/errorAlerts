@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masked. JSON **array** request bodies, which previously skipped masking
   entirely, are walked too.
 
+### Fixed
+
+- One value the engine's JSON serializer refuses no longer discards the whole
+  section it sits in. `extraInfo` is serialized as a unit, so a single value
+  that failed used to replace everything with `[unserializable value]`, losing
+  every other key the application logged. The struct is now retried one key at
+  a time: keys that convert keep their content, and the failing key alone is
+  replaced with a marker naming its type. A real trigger is a component or Java
+  object with a large internal graph, which passes through the walk untouched
+  and can overflow the serializer.
+
 ### Added
 
 - `maskKeyPatterns` setting: wildcard field-name matching for vendor spellings
