@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines SignatureService unit tests.
+	 */
 	function run(){
 		describe( "SignatureService", function(){
 			beforeEach( function(){

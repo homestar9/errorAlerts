@@ -14,19 +14,33 @@ component singleton accessors="true" {
 	/**
 	 * init
 	 *
-	 * Creates the LogLevels helper used for severity names, and records where
-	 * this module's own code lives so callerFrame() can skip its own frames.
-	 * The paths are computed instead of hard-coded because the module is not
-	 * always installed at /modules/errorAlerts/ - the test harness loads it
-	 * from the repo root, and apps can use modules_app or a custom location.
+	 * Creates the LogLevels helper and records the module's paths.
+	 * callerFrame() uses the paths to skip this module's stack frames. The paths
+	 * are calculated because applications can install the module anywhere.
 	 */
 	function init(){
 		variables.logLevels = new coldbox.system.logging.LogLevels();
 
-		/* How many raw stack frames to inspect when looking for the application
-		 * caller. A runaway recursive stack can hold thousands of frames, and
-		 * scanning them all on every alert would be wasted work. */
+		// Limit the search for an application frame on very large call stacks.
 		variables.MAX_SCAN_FRAMES = 100;
+
+		// The replacement text for a masked value.
+		variables.MASK_TOKEN = "*** masked ***";
+
+		// Limit nested output and stop recursion through self-referencing data.
+		variables.MAX_DEPTH = 5;
+
+		/* Charge each visited node for the JSON punctuation it will add. This also
+		 * limits work on structs and arrays with many small values. */
+		variables.NODE_OVERHEAD = 8;
+
+		// Stop a payload with many unique keys from growing the mask cache forever.
+		variables.VERDICT_CACHE_MAX = 1000;
+
+		/* Do not parse a JSON body larger than 2 MB. deserializeJSON() builds the
+		 * full value before the limited sanitizer can run. A larger body could use
+		 * too much memory while the server is already handling an error. */
+		variables.MAX_PARSE_CHARS = 2097152;
 
 		// The directory holding this file, e.g. ".../errorAlerts/models/".
 		var modelsPath           = getDirectoryFromPath( getCurrentTemplatePath() ).replace( "\", "/", "all" );
@@ -50,6 +64,9 @@ component singleton accessors="true" {
 		required string signature,
 		required numeric occurrence
 	){
+		// Compile masking once instead of once for every request field.
+		ensureMaskConfig();
+
 		var exception = buildException( arguments.logEvent.getExtraInfo() );
 
 		var payload = {
@@ -83,7 +100,10 @@ component singleton accessors="true" {
 
 		// Add extraInfo only when it was not already added as an exception.
 		if ( settings.includeScopes.extraInfo && payload.exception.isEmpty() ) {
-			payload.extraInfo = stringify( sanitizeDeep( arguments.logEvent.getExtraInfo() ), 2000 );
+			payload.extraInfo = stringify(
+				sanitizeDeep( arguments.logEvent.getExtraInfo() ),
+				settingOr( "extraInfoMaxLength", 2000 )
+			);
 		}
 
 		return payload;
@@ -111,14 +131,12 @@ component singleton accessors="true" {
 			windowSeconds   : arguments.seed.windowSeconds,
 			appName         : safeSetting( "appName" ),
 			environment     : safeSetting( "environment" ),
-			// Which server flushed this digest. Behind a load balancer each
-			// machine keeps its own throttle counts, so the digest is per-box.
+			// Each server keeps separate throttle counts and sends its own digest.
 			machine         : machineName(),
 			moduleVersion   : moduleVersion()
 		};
 
-		// Distinct routes and client addresses ThrottleService sampled during
-		// the window. Guarded so an older seed shape still builds.
+		// Use empty samples when an older digest seed does not include them.
 		if ( arguments.seed.keyExists( "samples" ) ) {
 			digest.samples = arguments.seed.samples;
 		}
@@ -214,9 +232,7 @@ component singleton accessors="true" {
 				var frames            = arguments.extraInfo.tagContext;
 				exception.totalFrames = frames.len();
 
-				/* Find the first frame that belongs to the application itself.
-				 * A database or ORM failure can bury the application's own code
-				 * far below framework frames, past the display cut-off. */
+				// Find application code that may appear below many framework frames.
 				var actionable = frameClassifier.findFirstApplicationFrame( frames, variables.MAX_SCAN_FRAMES );
 
 				var scanLimit = min( frames.len(), variables.MAX_SCAN_FRAMES );
@@ -229,12 +245,8 @@ component singleton accessors="true" {
 
 					var template = structKeyExists( frames[ i ], "template" ) ? frames[ i ].template : "";
 
-					/* A database failure fills the stack with driver frames like
-					 * "|SQLServer|6.0.0.1282|" - not file paths, nothing a
-					 * developer can open. Skip any frame whose template contains a
-					 * pipe or has no directory separator, since neither appears in
-					 * a real path. The first frame always stays so the throw site
-					 * is never hidden. */
+					/* Skip database driver frames that are not file paths. Always keep the
+					 * first frame because it marks the throw site. */
 					if (
 						i > 1 && template.len()
 						&& ( template.find( "|" ) || ( !template.find( "/" ) && !template.find( "\" ) ) )
@@ -246,9 +258,7 @@ component singleton accessors="true" {
 					lastKept = i;
 				}
 
-				/* When the application's own frame fell past the display cut-off,
-				 * append it as one extra pinned frame so the email always shows
-				 * which line of application code triggered the error. */
+				// Add the application frame even when it falls past the display limit.
 				if ( !actionable.isEmpty() ) {
 					exception.actionableFrame = {
 						index    : actionable.index,
@@ -262,8 +272,7 @@ component singleton accessors="true" {
 						);
 					}
 
-					// Second source excerpt: the application line that made the
-					// call, next to the throw site the first snippet shows.
+					// Add source for the application frame as well as the throw site.
 					if ( settings.codeSnippetLines && actionable.index > 1 ) {
 						exception.callerSnippet = snippetFor( actionable.template, actionable.line );
 					}
@@ -281,9 +290,9 @@ component singleton accessors="true" {
 	/**
 	 * firstOf
 	 *
-	 * Returns the first of the given keys that exists and has content, as a
-	 * string. Engines name the same value differently — Adobe uses `errNumber`
-	 * where others use `errorCode` — so callers pass every spelling.
+	 * Returns the first requested key that exists and has a value.
+	 * Callers pass several keys because engines use different names for the same
+	 * exception field. For example, Adobe uses errNumber instead of errorCode.
 	 *
 	 * @source The exception struct or object.
 	 * @keys   Key names to try, in order.
@@ -307,10 +316,9 @@ component singleton accessors="true" {
 	/**
 	 * frameStruct
 	 *
-	 * Returns one stack frame for the payload: display path, line, the raw
-	 * tagContext position, whether the frame is application code, and the
-	 * function name when the engine supplies one. Engines spell the function
-	 * key differently, and Lucee fills `id` with "??" when it has no name.
+	 * Converts a raw stack frame to the fields used in an alert.
+	 * Engines use different keys for the function name. Lucee uses "??" when a
+	 * function name is not available.
 	 *
 	 * @frame    The raw tagContext frame struct.
 	 * @index    The frame's position in the raw tagContext array.
@@ -338,13 +346,9 @@ component singleton accessors="true" {
 	/**
 	 * buildDatabaseDetail
 	 *
-	 * Returns the query-specific fields a database exception carries: the failing
-	 * SQL, the datasource, and the driver's own error codes. Without these a query
-	 * failure only reports the generic message and there is no way to tell which
-	 * statement broke. Returns an empty struct for a non-database exception.
-	 *
-	 * The SQL is capped at 2,000 characters because a generated statement can be
-	 * far longer than the whole email budget.
+	 * Returns the SQL, datasource, and driver codes from a database exception.
+	 * Returns an empty struct for other exception types. SQL is limited to 2,000
+	 * characters because generated statements can be very large.
 	 *
 	 * @extraInfo The exception struct or object.
 	 */
@@ -357,8 +361,7 @@ component singleton accessors="true" {
 				detail[ "sql" ] = truncate( sql, 2000 );
 			}
 
-			// Ordered so the labels keep this order and their camelCase spelling.
-			// A plain struct literal would come back uppercased on Adobe.
+			// An ordered struct keeps this label order and case on Adobe.
 			var fields = structNew( "ordered" );
 			fields[ "datasource" ]      = [ "datasource", "dataSource" ];
 			fields[ "queryError" ]      = [ "queryError" ];
@@ -366,11 +369,8 @@ component singleton accessors="true" {
 			fields[ "nativeErrorCode" ] = [ "nativeErrorCode" ];
 			fields[ "additional" ]      = [ "additional" ];
 
-			/* The bound parameter values, e.g. "value='4417'". The most useful
-			 * field for reproducing a failure and the only one that can carry
-			 * whatever a visitor typed, so an app can turn it off. maskKeys
-			 * cannot help here: the values are positional, with no field names
-			 * to match against. */
+			/* Bound SQL values can help reproduce a query error. They can also hold
+			 * user input. maskKeys cannot hide them because they have no field names. */
 			if ( settings.includeQueryParams ) {
 				fields[ "params" ] = [ "where" ];
 			}
@@ -390,17 +390,10 @@ component singleton accessors="true" {
 	/**
 	 * buildSnippet
 	 *
-	 * Returns the source lines around the line that threw, so the email shows the
-	 * failing code without anyone opening an editor. This is the one thing
-	 * ColdBox's Whoops page gives that a plain stack trace does not.
-	 *
-	 * Lucee and BoxLang put a ready-made excerpt on the stack frame as
-	 * `codePrintPlain`, but Adobe does not, so the file is read directly instead.
-	 * That works the same on every engine. Only the top frame is read, and only
-	 * `settings.codeSnippetLines` either side of it.
-	 *
-	 * Returns empty lines when the setting is 0, the file is gone (a compiled or
-	 * archived template), or it cannot be read.
+	 * Returns source lines around the line that threw.
+	 * The file is read directly because Adobe does not provide the codePrintPlain
+	 * excerpt that Lucee and BoxLang provide. Returns no lines when snippets are
+	 * disabled or the source file cannot be read.
 	 *
 	 * @extraInfo The exception struct or object.
 	 */
@@ -434,12 +427,9 @@ component singleton accessors="true" {
 	/**
 	 * snippetFor
 	 *
-	 * Reads the source lines around one file position. Shared by the throw-site
-	 * snippet and the application-caller snippet, so both apply the same
-	 * file-existence check and readLines() limits.
-	 *
-	 * Returns the empty snippet shape when the file is gone (a compiled or
-	 * archived template) or cannot be read.
+	 * Reads source lines around one file position.
+	 * Both source snippets use this method so they share the same checks and
+	 * limits. A missing or unreadable file returns an empty snippet.
 	 *
 	 * @template Absolute path of the file to read.
 	 * @line     The line to center the excerpt on.
@@ -464,13 +454,9 @@ component singleton accessors="true" {
 	/**
 	 * readLines
 	 *
-	 * Reads the lines around a target line. Stops as soon as the range is passed
-	 * so a large file is not loaded whole. Each line is capped, because one
-	 * minified or generated line could fill the whole email.
-	 *
-	 * A frame that reports a line past 10,000 is skipped entirely. Such frames
-	 * come from generated files, and reaching the line would mean streaming the
-	 * whole file on every alert.
+	 * Reads a limited range around one source line.
+	 * Reading stops after the range. Each line is limited so generated code cannot
+	 * fill the email. Lines after 10,000 are skipped to avoid reading a huge file.
 	 *
 	 * @template  Absolute path of the file to read.
 	 * @errorLine The line that threw.
@@ -523,11 +509,8 @@ component singleton accessors="true" {
 	/**
 	 * buildCauses
 	 *
-	 * Walks the `cause` chain and returns each wrapped exception as type,
-	 * message, and detail. A framework often catches a low-level error and
-	 * rethrows its own, which leaves the real reason only in the chain.
-	 *
-	 * Stops after five levels so a self-referencing chain cannot loop forever.
+	 * Returns the type, message, and detail from each exception in the cause chain.
+	 * The walk stops after five levels to prevent a loop.
 	 *
 	 * @extraInfo The exception struct or object.
 	 */
@@ -569,13 +552,9 @@ component singleton accessors="true" {
 	/**
 	 * buildRequest
 	 *
-	 * Returns the origin, the ColdBox event and route, and selected CGI values.
-	 * A value the request did not provide shows the settings.emptyValueText
-	 * placeholder, so a missing value is visibly missing rather than absent from
-	 * the email. Two rows are the exception: `user` only appears when the app
-	 * configured a userProvider, and `sessionId` only when
-	 * settings.includeScopes.session is true. For those, "N/A" would wrongly
-	 * suggest the request lacked a value when the feature is simply off.
+	 * Returns the origin, ColdBox route, and selected request values.
+	 * Missing request values use settings.emptyValueText. The user and sessionId
+	 * rows only appear when their features are active.
 	 *
 	 * @exception The already-built exception struct, used to find the origin.
 	 */
@@ -584,8 +563,7 @@ component singleton accessors="true" {
 
 		addValue( info, "origin", buildOrigin( arguments.exception ) );
 
-		// A copy-paste line for reproducing the request, e.g.
-		// "GET https://example.com/posts/hello?page=2". Empty outside a web request.
+		// Build a complete method and URL that a developer can copy.
 		addValue( info, "url", requestUrl() );
 
 		// Only when the application configured a userProvider closure.
@@ -596,10 +574,9 @@ component singleton accessors="true" {
 		try {
 			var event = coldbox.getRequestService().getContext();
 			addValue( info, "event", event.getCurrentEvent() );
-			// Only set on a routed (SES) URL, blank for an index.cfm?event= request.
+			// A routed URL sets this value. An index.cfm?event= request does not.
 			addValue( info, "route", event.getCurrentRoutedUrl() );
-			// The pattern that matched, e.g. ":slug". Says which route rule ran,
-			// which the routed URL on its own does not.
+			// Show the route pattern that matched the current URL.
 			addValue( info, "routePattern", event.getCurrentRoute() );
 			addValue( info, "routeName", event.getCurrentRouteName() );
 			addValue( info, "routedModule", event.getCurrentRoutedModule() );
@@ -607,13 +584,10 @@ component singleton accessors="true" {
 			// How far rendering got before the error.
 			addValue( info, "view", event.getCurrentView() );
 			addValue( info, "layout", event.getCurrentLayout() );
-			// An ajax caller never saw an error page, which explains why a visitor
-			// may not have reported anything.
+			// Record whether the caller was an Ajax request.
 			addValue( info, "isAjax", event.isAjax() ? "yes" : "no" );
 		} catch ( any e ) {
-			// Keep the promised keys even when the request context is missing
-			// or broke partway through. Only keys not already set are filled,
-			// so a value read before the failure is not overwritten.
+			// Fill missing keys without replacing values that were already read.
 			var routingKeys = [
 				"event",
 				"route",
@@ -632,14 +606,11 @@ component singleton accessors="true" {
 			}
 		}
 
-		// Not from the request, but they answer "which box" and "was this even a
-		// page view". A scheduled task leaves every value above empty, and
-		// without these rows nothing in the email explains why.
+		// These values identify the server and whether this was a web request.
 		addValue( info, "machine", machineName() );
 		addValue( info, "context", executionContext() );
 		addValue( info, "memory", memoryUsage() );
-		// How long the request had been running when it failed. "40 ms in" and
-		// "900 ms in" point at very different problems.
+		// Record how long the request ran before it failed.
 		addValue( info, "elapsed", elapsedMs() );
 
 		if ( settings.includeScopes.keyExists( "session" ) && settings.includeScopes.session ) {
@@ -655,13 +626,11 @@ component singleton accessors="true" {
 				addValue( info, "host", cgi.http_host );
 				addValue( info, "referer", cgi.http_referer );
 				addValue( info, "remoteAddr", cgi.remote_addr );
-				// Behind IIS, a load balancer, or Cloudflare, remoteAddr is the
-				// proxy. These two carry the real client address and scheme.
+				// A proxy may provide the original client address and URL scheme.
 				addValue( info, "forwardedFor", cgi.http_x_forwarded_for );
 				addValue( info, "forwardedProto", cgi.http_x_forwarded_proto );
 				addValue( info, "userAgent", cgi.http_user_agent );
-				// Bots and API clients send a distinctive accept header, which
-				// helps tell scripted traffic from a real visitor.
+				// The Accept header helps identify browsers, bots, and API clients.
 				addValue( info, "accept", cgi.http_accept );
 				addValue( info, "acceptLanguage", cgi.http_accept_language );
 				addValue( info, "https", cgi.https );
@@ -671,8 +640,7 @@ component singleton accessors="true" {
 			}
 		}
 
-		// Headers the application asked for, e.g. Content-Type, which explains
-		// many API failures and is not in the CGI rows above.
+		// Add the request headers selected in includeHeaders.
 		if ( isArray( settings.includeHeaders ) && settings.includeHeaders.len() ) {
 			try {
 				var headers = buildHeaders( getHTTPRequestData( false ).headers );
@@ -689,21 +657,15 @@ component singleton accessors="true" {
 	/**
 	 * buildUser
 	 *
-	 * Returns a description of the logged-in user by calling
-	 * settings.userProvider, which the application supplies as a closure and
-	 * which receives WireBox. The module stays free of any dependency on a
-	 * particular auth library this way.
-	 *
-	 * Returns an empty string when no provider is set, when it throws, or when it
-	 * returns something other than a string. A broken provider must never stop an
-	 * alert from being sent.
+	 * Calls the application's userProvider closure and returns its display text.
+	 * The closure receives WireBox, so it can use any authentication library.
+	 * A missing, invalid, or failing provider returns an empty string.
 	 */
 	private string function buildUser(){
 		try {
 			var provider = settings.userProvider;
 
-			// isClosure and isCustomFunction disagree about closures on some
-			// engines, so accept either before calling the provider.
+			// Engines do not agree on which function reports every closure.
 			if ( isSimpleValue( provider ) || !( isClosure( provider ) || isCustomFunction( provider ) ) ) {
 				return "";
 			}
@@ -718,12 +680,10 @@ component singleton accessors="true" {
 	/**
 	 * sessionIdentifier
 	 *
-	 * Returns the session identifier so several alerts from the same visitor can
-	 * be tied together, and matched against other logs. Prefers the servlet
-	 * session id and falls back to CFID/CFTOKEN.
+	 * Returns a session ID that can connect alerts from the same visitor.
+	 * The servlet session ID takes priority over CFID and CFTOKEN.
 	 *
-	 * Off unless settings.includeScopes.session is true: a live session id in an
-	 * email is enough to impersonate that visitor if the mailbox is not private.
+	 * This is off by default because a live session ID may allow impersonation.
 	 */
 	private string function sessionIdentifier(){
 		if ( !settings.includeScopes.keyExists( "session" ) || !settings.includeScopes.session ) {
@@ -749,10 +709,10 @@ component singleton accessors="true" {
 	/**
 	 * machineName
 	 *
-	 * Returns the host name of the server running the code. Different from the
-	 * `serverName` row, which is the host the client asked for — behind a load
-	 * balancer several machines answer for one host name, and this says which one
-	 * actually failed. Cached because the lookup can touch DNS.
+	 * Returns the host name of the server that handled the error.
+	 * serverName is the host requested by the client. Several servers may answer
+	 * for that name behind a load balancer. The result is cached because the
+	 * lookup may use DNS.
 	 */
 	private string function machineName(){
 		if ( variables.keyExists( "cachedMachineName" ) ) {
@@ -779,13 +739,9 @@ component singleton accessors="true" {
 	/**
 	 * executionContext
 	 *
-	 * Says whether the error came from a page request, a scheduled task, or some
-	 * other background thread, and names the Java thread so the alert can be
-	 * matched against FusionReactor or an engine log.
-	 *
-	 * A present cgi.request_method means a real HTTP request. Scheduled tasks and
-	 * spawned threads have none, which is what makes the whole Request section
-	 * empty for them.
+	 * Describes the request or background thread that produced the error.
+	 * The Java thread name can connect an alert to an engine log. Only an HTTP
+	 * request has cgi.request_method.
 	 */
 	private string function executionContext(){
 		var threadName = "";
@@ -814,10 +770,8 @@ component singleton accessors="true" {
 	/**
 	 * memoryUsage
 	 *
-	 * Reports JVM heap use at the moment of the failure, e.g.
-	 * "312 MB used of 2048 MB max". An OutOfMemoryError rarely names the code
-	 * that used the memory, so this row says whether the heap was already under
-	 * pressure when the error happened. Reading it costs nothing.
+	 * Reports JVM heap use when the error occurred.
+	 * This can show whether memory pressure contributed to an OutOfMemoryError.
 	 */
 	private string function memoryUsage(){
 		try {
@@ -833,10 +787,9 @@ component singleton accessors="true" {
 	/**
 	 * elapsedMs
 	 *
-	 * Reports how many milliseconds this request had been running when the
-	 * error happened, e.g. "412 ms". Lucee and BoxLang expose the request
-	 * start on the page context; Adobe does not, so the row is empty there.
-	 * Never reads anything that needs admin credentials.
+	 * Returns how many milliseconds the request ran before the error.
+	 * Lucee and BoxLang provide the start time. Adobe does not, so Adobe returns
+	 * an empty string.
 	 */
 	private string function elapsedMs(){
 		try {
@@ -852,11 +805,9 @@ component singleton accessors="true" {
 	/**
 	 * requestUrl
 	 *
-	 * Returns one copyable line for reproducing the request:
-	 * "GET https://example.com/posts/hello?page=2". The query string passes
-	 * through queryStringValue(), so maskQueryString applies. The scheme
-	 * prefers the X-Forwarded-Proto header because behind a proxy cgi.https
-	 * reports the proxy hop, not what the client used.
+	 * Returns a method and URL that can be copied to reproduce the request.
+	 * queryStringValue() applies the masking setting. X-Forwarded-Proto provides
+	 * the original scheme when a proxy changes cgi.https.
 	 *
 	 * Returns an empty string outside a web request.
 	 */
@@ -883,14 +834,12 @@ component singleton accessors="true" {
 	/**
 	 * runtimeInfo
 	 *
-	 * Returns the CFML engine, Java, ColdBox, and errorAlerts versions for the
-	 * email's Runtime section. An error that only happens on one engine or
-	 * after an upgrade is invisible without these. Cached because none of them
-	 * change while the application is running.
+	 * Returns version details for the email's Runtime section.
+	 * The result is cached because the versions do not change while the
+	 * application runs.
 	 *
-	 * BoxLang and Lucee both define server.coldfusion for compatibility, so
-	 * their own keys are checked first. Keys without a readable value are left
-	 * out rather than shown blank.
+	 * BoxLang and Lucee also define server.coldfusion for compatibility. Their
+	 * engine-specific keys are checked first. Unavailable values are omitted.
 	 */
 	private struct function runtimeInfo(){
 		if ( variables.keyExists( "cachedRuntimeInfo" ) ) {
@@ -939,13 +888,11 @@ component singleton accessors="true" {
 	/**
 	 * buildHeaders
 	 *
-	 * Returns the request headers named in settings.includeHeaders, in that
-	 * order. Header names are matched ignoring case because clients vary the
-	 * casing. Values pass through sanitizeValue, so maskKeys and the length cap
-	 * apply.
+	 * Returns the headers named in settings.includeHeaders, in the same order.
+	 * Header name matching ignores case. Values pass through the masking and
+	 * length limits.
 	 *
-	 * Cookie and Authorization are refused even when listed: both carry
-	 * credentials, and email is not a safe place for either.
+	 * Credential headers are blocked even when the application lists them.
 	 *
 	 * @rawHeaders The headers struct from getHTTPRequestData( false ).
 	 */
@@ -974,9 +921,8 @@ component singleton accessors="true" {
 	/**
 	 * buildRequestBody
 	 *
-	 * Reads the raw HTTP body and hands it to buildBody(). Split in two so
-	 * buildBody() can be tested with a plain struct - getHTTPRequestData() only
-	 * works inside a real request.
+	 * Reads the raw HTTP body and passes it to buildBody().
+	 * Keeping the conversion separate lets tests run without a real request.
 	 */
 	private string function buildRequestBody(){
 		try {
@@ -989,15 +935,19 @@ component singleton accessors="true" {
 	/**
 	 * buildBody
 	 *
-	 * Converts the raw request body to safe text for email. For a JSON or API
-	 * request the payload is in the body, not in rc, so without this row a
-	 * failing API call shows no input at all.
+	 * Converts a raw request body to text that can be included in an email.
 	 *
-	 * Form posts are skipped: their fields are already in the rc table, masked,
-	 * and repeating them raw here would print the same secrets unmasked. A JSON
-	 * body gets its top-level fields masked through sanitizeScope for the same
-	 * reason. Anything else is truncated plain text, and binary content shows
+	 * Form posts are skipped because rc already contains their masked fields.
+	 * JSON objects and arrays pass through sanitizeNode(). Binary content shows
 	 * only its size.
+	 *
+	 * A body accepted by isJSON() is never printed without masking. A body that
+	 * is too large, fails to parse, or parses to a simple value is reported by
+	 * size instead.
+	 *
+	 * Non-JSON text is truncated and shown as sent because it has no field names
+	 * to mask. Engines disagree about malformed JSON. Adobe may treat text as
+	 * non-JSON when Lucee or BoxLang accepts it as JSON.
 	 *
 	 * @httpData The struct from getHTTPRequestData( true ): headers plus content.
 	 */
@@ -1036,15 +986,32 @@ component singleton accessors="true" {
 			}
 
 			if ( isJSON( content ) ) {
+				// Avoid building a large value in memory while handling an error.
+				if ( content.len() > variables.MAX_PARSE_CHARS ) {
+					return "[body too large to mask, #content.len()# chars]";
+				}
+
 				try {
-					var parsed = deserializeJSON( content );
-					if ( isStruct( parsed ) ) {
-						return truncate( serializeJSON( sanitizeScope( parsed ) ), settings.requestBodyMaxLength );
+					var parsed = parseJson( content );
+					if ( isStruct( parsed ) || isArray( parsed ) ) {
+						ensureCompiled();
+						var cleanBody = sanitizeNode(
+							"",
+							parsed,
+							newSanitizeState( settings.requestBodyMaxLength, settingOr( "longValueMaxLength", 500 ) ),
+							0
+						);
+						return truncate( serializeJSON( cleanBody ), settings.requestBodyMaxLength );
 					}
 				} catch ( any e ) {
 				}
+
+				/* The JSON could not be walked or had no field names. Report its size
+				 * instead of printing content that did not pass the mask check. */
+				return "[body could not be parsed for masking, #content.len()# chars]";
 			}
 
+			// Non-JSON text has no field names for maskKeys, so show it as sent.
 			return truncate( content, settings.requestBodyMaxLength );
 		} catch ( any e ) {
 			return "";
@@ -1088,10 +1055,9 @@ component singleton accessors="true" {
 	 *
 	 * Returns the file and line that produced the error, as `template:line`.
 	 *
-	 * For a real exception the first stack frame is the throw site, so that wins.
-	 * A plain `log.error()` call has no stack frames, so the live CFML call stack
-	 * is read instead and the first frame outside this module and LogBox is used.
-	 * Returns an empty string when neither is available.
+	 * An exception uses its first stack frame. A plain log.error() call uses the
+	 * first live stack frame outside this module and LogBox. Returns an empty
+	 * string when neither frame is available.
 	 *
 	 * @exception The built exception struct, empty when extraInfo was not an exception.
 	 */
@@ -1113,13 +1079,11 @@ component singleton accessors="true" {
 	/**
 	 * callerFrame
 	 *
-	 * Walks the live call stack and returns the first frame that belongs to the
-	 * application rather than to the alerting code itself. Frames inside this
-	 * module and inside LogBox are skipped, because they are always on the stack
-	 * when an alert is built and would hide the real caller.
+	 * Returns the first application frame from the live call stack.
+	 * Frames from this module and LogBox are skipped because they are part of the
+	 * alert process rather than the original logging call.
 	 *
-	 * Only meaningful while the original call is still running, which is the case
-	 * for the appender path. Returns an empty string if the stack is unavailable.
+	 * Returns an empty string when the live stack is unavailable.
 	 */
 	private string function callerFrame(){
 		try {
@@ -1129,8 +1093,7 @@ component singleton accessors="true" {
 					continue;
 				}
 				var template = frame.template.replace( "\", "/", "all" );
-				// Skip this module's own frames (paths computed in init, so a
-				// non-standard install location still works) and LogBox frames.
+				// Skip alerting code so the result points to the original caller.
 				if (
 					template.findNoCase( variables.ownModelsPath )
 					|| template.findNoCase( variables.ownInterceptorsPath )
@@ -1149,10 +1112,8 @@ component singleton accessors="true" {
 	/**
 	 * relativeTemplate
 	 *
-	 * Trims the application root off a file path so the email shows
-	 * `/handlers/Main.cfc` instead of a long absolute path. Returns the path
-	 * unchanged when settings.relativePaths is off, and when the file sits
-	 * outside the application root.
+	 * Removes the application root from a file path when relativePaths is on.
+	 * Paths outside the application root stay unchanged.
 	 *
 	 * @template The absolute file path from a stack frame.
 	 */
@@ -1176,9 +1137,9 @@ component singleton accessors="true" {
 	/**
 	 * maskQueryString
 	 *
-	 * Replaces the value of any query string pair whose name matches
-	 * settings.maskKeys. The rc table masks these keys, but the raw query string
-	 * would otherwise print a secret from a GET request in full.
+	 * Masks matching field values in a query string.
+	 * Without this step, the rc table could hide a value while the raw URL still
+	 * exposed it.
 	 *
 	 * @queryString The raw cgi.query_string value.
 	 */
@@ -1187,14 +1148,15 @@ component singleton accessors="true" {
 			return "";
 		}
 
+		ensureCompiled();
+
 		var pairs = arguments.queryString.listToArray( "&" );
 		var clean = [];
 
 		for ( var pair in pairs ) {
 			var name = pair.listFirst( "=" );
 
-			// Compare the decoded name, so an encoded name like "pass%77ord"
-			// cannot slip past the mask list.
+			// Decode field names before matching so URL encoding cannot bypass masking.
 			var decoded = name;
 			try {
 				decoded = urlDecode( name );
@@ -1203,7 +1165,7 @@ component singleton accessors="true" {
 
 			// A pair without "=" has no value to hide, so it passes through.
 			if ( pair.find( "=" ) && isMasked( decoded ) ) {
-				clean.append( "#name#=*** masked ***" );
+				clean.append( "#name#=#variables.MASK_TOKEN#" );
 			} else {
 				clean.append( pair );
 			}
@@ -1215,16 +1177,44 @@ component singleton accessors="true" {
 	/**
 	 * isMasked
 	 *
-	 * True when a field name appears in settings.maskKeys. The comparison is an
-	 * exact match apart from case, so each field an application wants hidden must
-	 * be named in the list. Partial matching was deliberately avoided: it hid
-	 * fields nobody asked to hide, such as `tokenCount`, which made a value
-	 * disappear from a diagnostic email for no reason.
+	 * Returns true when the masking settings match a field name.
+	 * maskKeys uses an exact match that ignores case. Exact matching prevents a
+	 * key such as `token` from hiding `tokenCount`. Wildcard patterns are checked
+	 * only when the exact lookup misses.
+	 *
+	 * Exact matches use a hash lookup. Pattern results are cached by field name
+	 * because nested payloads often repeat the same names.
 	 *
 	 * @key The field name to test.
 	 */
 	private boolean function isMasked( required string key ){
-		return settings.maskKeys.findNoCase( arguments.key ) > 0;
+		if ( !arguments.key.len() ) {
+			return false;
+		}
+		ensureCompiled();
+
+		var compiled = variables.maskCompiled;
+		if ( structKeyExists( compiled.exactLookup, arguments.key ) ) {
+			return true;
+		}
+		if ( !compiled.keyPatterns.len() ) {
+			return false;
+		}
+		if ( structKeyExists( compiled.verdictCache, arguments.key ) ) {
+			return compiled.verdictCache[ arguments.key ];
+		}
+
+		var masked = false;
+		for ( var pattern in compiled.keyPatterns ) {
+			if ( reFindNoCase( pattern, arguments.key ) ) {
+				masked = true;
+				break;
+			}
+		}
+		if ( structCount( compiled.verdictCache ) < variables.VERDICT_CACHE_MAX ) {
+			compiled.verdictCache[ arguments.key ] = masked;
+		}
+		return masked;
 	}
 
 	/**
@@ -1262,29 +1252,28 @@ component singleton accessors="true" {
 	 *
 	 * Masks a sensitive key or converts its value to a limited string.
 	 *
-	 * The key must match an entry in settings.maskKeys exactly, ignoring case.
-	 * A field is masked only when the application listed it, so a name like
-	 * `newPassword` is NOT covered by the entry `password` and has to be added
-	 * on its own. The check happens before any conversion so a secret is never
-	 * serialized into email.
+	 * Masking checks the key before converting the value. This prevents a secret
+	 * from reaching serialized email content. maskKeys matches exact names, while
+	 * maskKeyPatterns provides optional wildcard matching.
 	 *
-	 * @key   The scope key, checked against settings.maskKeys.
-	 * @value The value to sanitize, any type.
+	 * Complex values pass through sanitizeNode() so nested keys are also checked.
+	 * A null value becomes a placeholder instead of causing the rc table to fail.
+	 *
+	 * @key   The scope key, checked against the masking configuration.
+	 * @value The value to sanitize, any type, may be null.
 	 */
-	private string function sanitizeValue( required string key, required any value ){
-		if ( isMasked( arguments.key ) ) {
-			return "*** masked ***";
-		}
+	private string function sanitizeValue( required string key, any value ){
+		ensureCompiled();
 
-		if ( isBinary( arguments.value ) ) {
-			return "[binary, #len( arguments.value )# bytes]";
-		}
-
-		if ( isSimpleValue( arguments.value ) ) {
-			return truncate( toString( arguments.value ), settings.rcValueMaxLength );
+		if ( isNull( arguments.value ) ) {
+			return "[null]";
 		}
 
 		if ( isObject( arguments.value ) ) {
+			// Some objects report isStruct(), so exclude objects before walking data.
+			if ( isMasked( arguments.key ) ) {
+				return variables.MASK_TOKEN;
+			}
 			try {
 				return "[object #getMetadata( arguments.value ).name#]";
 			} catch ( any e ) {
@@ -1292,59 +1281,131 @@ component singleton accessors="true" {
 			}
 		}
 
-		return truncate( stringify( arguments.value, settings.rcValueMaxLength ), settings.rcValueMaxLength );
+		var clean = sanitizeNode(
+			arguments.key,
+			arguments.value,
+			newSanitizeState( settings.rcValueMaxLength, settings.rcValueMaxLength ),
+			0
+		);
+
+		// Serialize containers only. Simple values already include any size label.
+		return isSimpleValue( clean ) ? clean : stringify( clean, settings.rcValueMaxLength );
 	}
 
 	/**
 	 * sanitizeDeep
 	 *
-	 * Returns a copy of a value with every key named in settings.maskKeys
-	 * replaced, at any nesting depth. Structs and arrays are walked. Any other
-	 * value is returned as it is, so the caller's own length limit still applies.
+	 * Returns a copy with matching keys masked at every visited level.
+	 * The method walks structs and arrays. Objects and queries stay unchanged and
+	 * are handled later by the serializer and output limit.
 	 *
-	 * This is needed because ColdBox's RestHandler passes getHTTPRequestData()
-	 * into extraInfo, which puts the Authorization header into the email.
-	 * buildHeaders() cannot help: the hardcoded Cookie and Authorization block
-	 * there only covers the Request section, and this value arrives through
-	 * extraInfo instead.
+	 * RestHandler can place request headers inside extraInfo. This walk prevents
+	 * a configured secret field from bypassing the Request section's checks.
 	 *
-	 * Values are not truncated here. sanitizeValue() clips every value to
-	 * rcValueMaxLength, which would cut a stack trace down to nothing, so this
-	 * method only masks and lets the caller's stringify() cap the whole result.
+	 * The walk stops after collecting enough content for extraInfoMaxLength.
+	 * Individual strings use longValueMaxLength unless their key is exempt.
 	 *
-	 * A failure returns a placeholder instead of the original value, so an error
-	 * while sanitizing can never print a secret.
+	 * A failure returns a placeholder instead of unchecked original content.
 	 *
 	 * @value The value to sanitize, any type.
-	 * @depth The current nesting level. Deep or looping structures stop at 5.
 	 */
-	private any function sanitizeDeep( required any value, numeric depth = 0 ){
+	private any function sanitizeDeep( required any value ){
+		ensureCompiled();
+		return sanitizeNode(
+			"",
+			arguments.value,
+			newSanitizeState( settingOr( "extraInfoMaxLength", 2000 ), settingOr( "longValueMaxLength", 500 ) ),
+			0
+		);
+	}
+
+	/**
+	 * sanitizeNode
+	 *
+	 * Recursively converts one value to content that can be included in email.
+	 * A matching key becomes the mask token before its value is read. Strings use
+	 * sanitizeString(). Structs and arrays stop at the depth or character limit.
+	 * Omitted entries are counted without being read. Objects, queries, and other
+	 * values pass through to the caller's serializer.
+	 *
+	 * A failed node becomes a placeholder. Other values can still be included.
+	 *
+	 * @keyName The key this value sits under; "" for roots and array items.
+	 * @value   The value to sanitize, any type, may be null.
+	 * @state   The shared walk state from newSanitizeState().
+	 * @depth   The current nesting level, capped at MAX_DEPTH.
+	 */
+	private any function sanitizeNode(
+		required string keyName,
+		any value,
+		required struct state,
+		numeric depth = 0
+	){
 		try {
-			if ( arguments.depth > 5 ) {
+			if ( arguments.depth > variables.MAX_DEPTH ) {
 				return "[nested too deep]";
+			}
+			if ( arguments.state.remaining <= 0 ) {
+				return "[omitted, size limit]";
+			}
+			if ( variables.maskCompiled.hasMaskConfig && isMasked( arguments.keyName ) ) {
+				arguments.state.remaining -= arguments.keyName.len() + variables.MASK_TOKEN.len() + variables.NODE_OVERHEAD;
+				return variables.MASK_TOKEN;
+			}
+			if ( isNull( arguments.value ) ) {
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
+				return "[null]";
+			}
+			if ( isBinary( arguments.value ) ) {
+				arguments.state.remaining -= arguments.keyName.len() + 24 + variables.NODE_OVERHEAD;
+				return "[binary, #len( arguments.value )# bytes]";
+			}
+			if ( isSimpleValue( arguments.value ) ) {
+				return sanitizeString( arguments.keyName, toString( arguments.value ), arguments.state, arguments.depth );
 			}
 
 			if ( isArray( arguments.value ) ) {
-				var cleanList = [];
-				for ( var item in arguments.value ) {
-					cleanList.append( sanitizeDeep( item, arguments.depth + 1 ) );
+				var cleanList  = [];
+				var totalItems = arguments.value.len();
+				for ( var i = 1; i <= totalItems; i++ ) {
+					if ( arguments.state.remaining <= 0 ) {
+						cleanList.append( "[#totalItems - i + 1# more items]" );
+						break;
+					}
+					cleanList.append(
+						!arrayIsDefined( arguments.value, i )
+						 ? "[null]"
+						 : sanitizeNode( "", arguments.value[ i ], arguments.state, arguments.depth + 1 )
+					);
 				}
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
 				return cleanList;
 			}
 
-			// isStruct() is true for many object types, so check isObject()
-			// first and leave objects alone rather than trying to walk them.
+			/* Check isObject() first because some objects also report isStruct().
+			 * Objects, queries, XML, and other values pass through to the final
+			 * serializer and length limit. */
 			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
+				arguments.state.remaining -= variables.NODE_OVERHEAD;
 				return arguments.value;
 			}
 
-			var clean = structNew( "ordered" );
+			var clean     = structNew( "ordered" );
+			var totalKeys = structCount( arguments.value );
+			var visited   = 0;
 			for ( var key in arguments.value ) {
-				clean[ key ] = isMasked( key ) ? "*** masked ***" : sanitizeDeep(
-					arguments.value[ key ],
-					arguments.depth + 1
-				);
+				if ( arguments.state.remaining <= 0 ) {
+					clean[ "..." ] = "[#totalKeys - visited# more keys]";
+					break;
+				}
+				visited++;
+				// Display a short key, but use its full name for the mask check.
+				var displayKey = key.len() > 200 ? key.left( 197 ) & "…" : key;
+				clean[ displayKey ] = isNull( arguments.value[ key ] )
+				 ? "[null]"
+				 : sanitizeNode( key, arguments.value[ key ], arguments.state, arguments.depth + 1 );
 			}
+			arguments.state.remaining -= variables.NODE_OVERHEAD;
 			return clean;
 		} catch ( any e ) {
 			return "[value could not be sanitized]";
@@ -1352,9 +1413,171 @@ component singleton accessors="true" {
 	}
 
 	/**
+	 * sanitizeString
+	 *
+	 * Limits one simple value and charges its size to the shared budget.
+	 * Root values and exempt keys use the complete output limit. Other values use
+	 * the per-value limit. Truncated values include their original size.
+	 *
+	 * len() and left() avoid copying more characters than the limit allows.
+	 *
+	 * @keyName The key the value sits under, used for the exemption lookup.
+	 * @text    The value as a string.
+	 * @state   The shared walk state from newSanitizeState().
+	 * @depth   The current nesting level; 0 means the root of the pass.
+	 */
+	private string function sanitizeString(
+		required string keyName,
+		required string text,
+		required struct state,
+		required numeric depth
+	){
+		var totalLength = arguments.text.len();
+		var isExempt    = arguments.keyName.len()
+			&& structKeyExists( variables.maskCompiled.exemptLookup, arguments.keyName );
+		var cap = ( isExempt || arguments.depth == 0 || arguments.state.valueCap == 0 )
+			? arguments.state.contextCap
+			: arguments.state.valueCap;
+
+		var kept = arguments.text;
+		if ( totalLength > cap ) {
+			kept = arguments.text.left( cap ) & "… [truncated, #totalLength# chars total]";
+		}
+
+		arguments.state.remaining -= arguments.keyName.len() + kept.len() + variables.NODE_OVERHEAD;
+		return kept;
+	}
+
+	/**
+	 * newSanitizeState
+	 *
+	 * Builds the mutable state shared by one recursive sanitize pass.
+	 * CFML passes the struct by reference, so every level uses the same budget.
+	 *
+	 * @budget   Total characters this pass may collect. Matches the caller's
+	 *           final output cap: serializing only adds characters, so
+	 *           collecting this much guarantees the final clip is reached.
+	 * @valueCap Per-value cap for simple values, from longValueMaxLength.
+	 */
+	private struct function newSanitizeState( required numeric budget, required numeric valueCap ){
+		return {
+			remaining  : arguments.budget,
+			contextCap : arguments.budget,
+			valueCap   : arguments.valueCap
+		};
+	}
+
+	/**
+	 * ensureCompiled
+	 *
+	 * Compiles masking when no compiled configuration exists.
+	 * build() checks for settings changes once per alert. This smaller check also
+	 * supports tests that call sanitizer methods without calling build().
+	 */
+	private void function ensureCompiled(){
+		if ( !structKeyExists( variables, "maskCompiled" ) ) {
+			ensureMaskConfig();
+		}
+	}
+
+	/**
+	 * ensureMaskConfig
+	 *
+	 * Compiles masking when the settings fingerprint changes.
+	 * build() calls this once per alert. The fingerprint supports tests that
+	 * replace settings between calls. Two threads may compile the same result,
+	 * which is safe because both assignments are equal.
+	 */
+	private void function ensureMaskConfig(){
+		var fingerprint = settingOr( "maskKeys", [] ).toList( "|" )
+			& "##" & settingOr( "maskKeyPatterns", [] ).toList( "|" )
+			& "##" & settingOr( "longValueExemptKeys", [] ).toList( "|" );
+
+		if (
+			!structKeyExists( variables, "maskCompiled" )
+			|| variables.maskCompiled.fingerprint != fingerprint
+		) {
+			variables.maskCompiled = compileMaskConfig( fingerprint );
+		}
+	}
+
+	/**
+	 * compileMaskConfig
+	 *
+	 * Builds the lookup state used by the sanitizer:
+	 *
+	 * - exactLookup stores maskKeys for a fast, case-insensitive hash lookup.
+	 * - keyPatterns stores compiled wildcard regular expressions.
+	 * - exemptLookup stores longValueExemptKeys.
+	 * - verdictCache stores pattern results by field name.
+	 * - hasMaskConfig lets the walker skip checks when masking is not configured.
+	 *
+	 * @fingerprint The fingerprint string identifying this configuration.
+	 */
+	private struct function compileMaskConfig( required string fingerprint ){
+		var compiled = {
+			fingerprint   : arguments.fingerprint,
+			exactLookup   : {},
+			keyPatterns   : [],
+			exemptLookup  : {},
+			verdictCache  : {},
+			hasMaskConfig : false
+		};
+
+		for ( var key in settingOr( "maskKeys", [] ) ) {
+			if ( key.len() ) {
+				compiled.exactLookup[ key ] = true;
+			}
+		}
+		for ( var pattern in settingOr( "maskKeyPatterns", [] ) ) {
+			if ( pattern.len() ) {
+				compiled.keyPatterns.append( wildcardToRegex( pattern ) );
+			}
+		}
+		for ( var exempt in settingOr( "longValueExemptKeys", [] ) ) {
+			if ( exempt.len() ) {
+				compiled.exemptLookup[ exempt ] = true;
+			}
+		}
+		compiled.hasMaskConfig = structCount( compiled.exactLookup ) > 0 || compiled.keyPatterns.len() > 0;
+
+		return compiled;
+	}
+
+	/**
+	 * wildcardToRegex
+	 *
+	 * Converts a wildcard pattern to a regular expression for the full key.
+	 * Regular expression characters are escaped. Each * becomes ".*".
+	 *
+	 * @pattern The wildcard pattern from settings.maskKeyPatterns.
+	 */
+	private string function wildcardToRegex( required string pattern ){
+		var escaped = reReplace( arguments.pattern, "([\\\.\[\]\(\)\+\?\^\$\|\{\}])", "\\\1", "all" );
+		return "^" & escaped.replace( "*", ".*", "all" ) & "$";
+	}
+
+	/**
+	 * settingOr
+	 *
+	 * Returns a module setting or a default value when the key is missing.
+	 * This supports applications and test fixtures created before a setting was
+	 * added.
+	 *
+	 * @name         The settings key to read.
+	 * @defaultValue The value to use when the key is missing.
+	 */
+	private any function settingOr( required string name, required any defaultValue ){
+		return structKeyExists( settings, arguments.name ) ? settings[ arguments.name ] : arguments.defaultValue;
+	}
+
+	/**
 	 * stringify
 	 *
 	 * Converts a value to a limited string without throwing.
+	 *
+	 * If a struct cannot be converted as one value, its keys are converted one at
+	 * a time. One unsupported value should not hide every readable sibling.
 	 *
 	 * @value     The value to serialize, any type.
 	 * @maxLength The maximum length of the returned string.
@@ -1364,10 +1587,92 @@ component singleton accessors="true" {
 			if ( isSimpleValue( arguments.value ) ) {
 				return truncate( toString( arguments.value ), arguments.maxLength );
 			}
-			return truncate( serializeJSON( arguments.value ), arguments.maxLength );
+			return truncate( toJson( arguments.value ), arguments.maxLength );
+		} catch ( any e ) {
+			return truncate( salvageStruct( arguments.value ), arguments.maxLength );
+		}
+	}
+
+	/**
+	 * salvageStruct
+	 *
+	 * Rebuilds a failed struct conversion one key at a time.
+	 * Readable values stay visible. An unreadable value becomes a marker. Values
+	 * that are not plain structs use the original placeholder.
+	 *
+	 * @value The value whose conversion failed.
+	 */
+	private string function salvageStruct( required any value ){
+		try {
+			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
+				return "[unserializable value]";
+			}
+
+			var pairs = [];
+			for ( var key in arguments.value ) {
+				// Serialize the key so the rebuilt text remains valid JSON.
+				pairs.append( toJson( key ) & ":" & jsonOrMarker( arguments.value[ key ] ) );
+			}
+			return "{" & pairs.toList( "," ) & "}";
 		} catch ( any e ) {
 			return "[unserializable value]";
 		}
+	}
+
+	/**
+	 * jsonOrMarker
+	 *
+	 * Returns one value as JSON or a marker for an unsupported value.
+	 * An object marker includes its type when the type is available.
+	 *
+	 * @value The value to convert, any type, may be null.
+	 */
+	private string function jsonOrMarker( any value ){
+		if ( isNull( arguments.value ) ) {
+			return toJson( "[null]" );
+		}
+
+		try {
+			return toJson( arguments.value );
+		} catch ( any e ) {
+			// The conversion failed, so return a marker below.
+		}
+
+		if ( isObject( arguments.value ) ) {
+			try {
+				return toJson( "[object #getMetadata( arguments.value ).name#: could not be serialized]" );
+			} catch ( any e ) {
+				// The type name is unavailable, so report it without one.
+			}
+		}
+
+		return toJson( "[value could not be serialized]" );
+	}
+
+	/**
+	 * toJson
+	 *
+	 * Serializes one value.
+	 * A separate method lets tests force a failure on every engine.
+	 *
+	 * @value The value to serialize, any type.
+	 */
+	private string function toJson( required any value ){
+		return serializeJSON( arguments.value );
+	}
+
+	/**
+	 * parseJson
+	 *
+	 * Deserializes one request body.
+	 * A separate method lets tests force the same parse outcomes on every engine.
+	 * Engines disagree about malformed JSON. For example, Adobe rejects a
+	 * trailing comma that Lucee and BoxLang accept.
+	 *
+	 * @content The request body text.
+	 */
+	private any function parseJson( required string content ){
+		return deserializeJSON( arguments.content );
 	}
 
 	/**

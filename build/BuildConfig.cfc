@@ -1,9 +1,9 @@
 /**
  * Shared settings and helpers for every build task.
  *
- * Each task creates one of these first. It finds the project root, reads build/build.json,
- * fills in anything the file leaves out, and hands back one settings struct. It also owns the
- * two helpers that run outside programs (git, gh) so every task behaves the same way.
+ * Finds the project root and reads build/build.json. It fills in missing values
+ * and provides one settings struct to every build task. It also runs external
+ * programs such as git and gh in the same way for every task.
  *
  * You should not need to edit this file. Everything a project changes lives in build.json.
  */
@@ -22,8 +22,7 @@ component {
 		// The project root is one level above the build folder.
 		variables.root        = reReplace( variables.buildDir, "[\\/][^\\/]+$", "" );
 		variables.binaryCache = {};
-		// Records which settings build.json set, so a default that depends on another setting
-		// never overwrites a deliberate choice. merge() fills this in.
+		// Track values set in build.json so derived defaults do not replace them.
 		variables.touchedKeys = {};
 		variables.settings    = loadSettings();
 		return this;
@@ -55,9 +54,8 @@ component {
 	 *
 	 * Turns a path relative to the project root into a full path.
 	 *
-	 * Do not rename this to resolvePath. CommandBox tasks already have a resolvePath() that
-	 * wins over one declared here, and it measures from the task file's folder instead of the
-	 * project root, so paths come back wrong with no error to tell you.
+	 * Do not rename this method to resolvePath. CommandBox already provides a
+	 * resolvePath() that starts from the task file instead of the project root.
 	 *
 	 * @relative A path relative to the project root, for example "CHANGELOG.md".
 	 */
@@ -120,19 +118,15 @@ component {
 	/**
 	 * execNative
 	 *
-	 * Runs an outside program such as git or gh and returns its exit code and text output. It
-	 * never throws, so the caller decides what a failure means. That matters for checks such
-	 * as `git rev-parse --verify`, where a non-zero exit is the answer we want.
+	 * Runs an external program and returns its exit code and output.
+	 * The method does not throw. Some callers expect a nonzero exit code as a
+	 * valid result, such as a git check for a missing ref.
 	 *
-	 * Arguments are passed as a list rather than one long string. The program gets each one
-	 * exactly as written, so a file path containing spaces needs no quoting and cannot be
-	 * split in the wrong place.
+	 * Each argument is passed separately. Paths with spaces need no extra quotes.
 	 *
-	 * This runs the program directly through Java instead of through CommandBox. Task files
-	 * are handed helpers such as command() and shell by CommandBox, but a plain component like
-	 * this one is not, so it does its own process handling. Running directly also means no
-	 * shell features: no pipes, no redirection, no wildcards. Every call here is one program
-	 * with plain arguments, which is all a release needs.
+	 * This plain component does not receive the CommandBox task helpers. Java
+	 * starts the process directly instead. Shell features such as pipes,
+	 * redirection, and wildcards are not available.
 	 *
 	 * @name The program name, for example "git".
 	 * @args The arguments, for example [ "status", "--porcelain" ].
@@ -148,8 +142,7 @@ component {
 		try {
 			var builder = createObject( "java", "java.lang.ProcessBuilder" ).init( argList );
 			builder.directory( createObject( "java", "java.io.File" ).init( variables.root ) );
-			// Fold error output into normal output. Callers show one block of text, and a
-			// program's complaint is usually the most useful part of it.
+			// Combine both output streams so callers can display one useful message.
 			builder.redirectErrorStream( javaCast( "boolean", true ) );
 
 			var process = builder.start();
@@ -167,8 +160,7 @@ component {
 
 			return { exitCode : process.waitFor(), output : trim( output.toString() ) };
 		} catch ( any e ) {
-			// Reaching here almost always means the program is not installed. 127 is the
-			// shell's own "command not found" code, so callers can spot that case.
+			// Exit code 127 lets callers identify a program that could not start.
 			return {
 				exitCode : 127,
 				output   : "Could not run '#arguments.name#': #e.message#"
@@ -191,17 +183,14 @@ component {
 	/**
 	 * findBinary
 	 *
-	 * Finds a program and returns its full path, for example
-	 * C:\Program Files\Git\cmd\git.exe. Returns the bare name when nothing is found, which
-	 * lets the system try its own lookup and produces a readable error if the tool is missing.
+	 * Returns the full path to a program when it can be found.
+	 * Returns the bare name when the search fails so the system can try its own
+	 * lookup and return a useful error.
 	 *
-	 * The path comes back without quotes. execNative() passes arguments to the program one at
-	 * a time, so spaces in a path are already safe, and quotes would become part of the name.
+	 * The path has no quotes because execNative() passes each argument separately.
 	 *
-	 * It searches PATH first, then a list of usual install folders. That second pass matters:
-	 * a terminal opened before you installed a tool keeps its old PATH until you open a new
-	 * one, so a program that works in a fresh window can look missing here. Searching the
-	 * usual folders means a stale PATH cannot stop a release.
+	 * The search checks PATH and then common installation folders. The second
+	 * search supports terminals whose PATH has not updated after an install.
 	 *
 	 * Results are remembered for the life of the task.
 	 *
@@ -245,7 +234,7 @@ component {
 		return resolved;
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
+	/******************************** Private helpers ********************************/
 
 	/**
 	 * wellKnownDirs
@@ -290,8 +279,7 @@ component {
 	/**
 	 * loadSettings
 	 *
-	 * Builds the settings struct: start with the defaults, lay build.json over the top, then
-	 * check the result makes sense.
+	 * Builds settings from defaults and build.json, then validates the result.
 	 */
 	private struct function loadSettings(){
 		var result   = defaults();
@@ -355,10 +343,9 @@ component {
 	 *
 	 * Top-level files and folders kept out of the package.
 	 *
-	 * Each entry is a regular expression tested against the name of every top-level item. The
-	 * test is a partial match, so an entry that is the start of something you need must be
-	 * anchored: a bare "modules" would also match "modules_app". Only top-level items are
-	 * checked, and a folder that survives is copied whole.
+	 * Each regular expression checks a top-level file or folder name. Matching is
+	 * partial, so use anchors when needed. For example, `modules` also matches
+	 * `modules_app`. Included folders are copied in full.
 	 *
 	 * Add to this list with "excludesAdd" in build.json rather than replacing it.
 	 */
@@ -380,9 +367,9 @@ component {
 			// Notes for people and coding agents.
 			"(AGENTS|CLAUDE|DEVNOTES|RELEASE)\.md",
 			"\.bak$",
-			// Nothing we ship is an archive, and a stray zip can bloat a package many times over.
+			// Exclude archives that could make the package much larger.
 			"\.(zip|tar|tar\.gz|tgz|7z|rar)$",
-			// Every hidden file and folder: .git, .env, .artifacts, .tmp and friends.
+			// Exclude hidden files and folders such as .git, .env, and .artifacts.
 			"^[\\/]?\..*"
 		];
 	}
@@ -390,14 +377,13 @@ component {
 	/**
 	 * applyProjectTypeDefaults
 	 *
-	 * Adjusts defaults to suit the project type. An app has nowhere to publish on ForgeBox, so
-	 * that step is off unless build.json turns it back on.
+	 * Adjusts defaults for the project type.
+	 * Application projects do not publish to ForgeBox unless build.json enables it.
 	 *
 	 * @settings The settings struct, changed in place.
 	 */
 	private void function applyProjectTypeDefaults( required struct settings ){
-		// Only change the default. A build.json that names publish.forgebox itself is left
-		// alone, which is what userTouched() checks.
+		// Keep an explicit publish.forgebox value from build.json.
 		if ( lCase( arguments.settings.projectType ) == "app" && !userTouched( "publish.forgebox" ) ) {
 			arguments.settings.publish.forgebox = false;
 		}
@@ -406,8 +392,8 @@ component {
 	/**
 	 * fillDerivedDefaults
 	 *
-	 * Works out the settings that can be read from the project itself, so build.json can stay
-	 * short. Right now that is the test runner URL, taken from box.json's testbox.runner.
+	 * Fills settings that can be read from the project.
+	 * The test runner URL comes from box.json when build.json omits it.
 	 *
 	 * @settings The settings struct, changed in place.
 	 */
@@ -439,9 +425,8 @@ component {
 	/**
 	 * merge
 	 *
-	 * Lays one struct over another. Nested structs are merged key by key so a build.json that
-	 * sets only publish.github keeps the default for publish.forgebox. Arrays replace whatever
-	 * they land on, because a half-replaced exclude list would be a puzzle to debug.
+	 * Merges one settings struct over another.
+	 * Nested structs merge by key. Arrays replace the existing array as one value.
 	 *
 	 * @base    The starting struct.
 	 * @overlay The values to lay over it.
@@ -470,8 +455,7 @@ component {
 	/**
 	 * userTouched
 	 *
-	 * Reports whether build.json set a key, so defaults that depend on other settings do not
-	 * overwrite a deliberate choice.
+	 * Returns true when build.json set a key.
 	 *
 	 * @key The key, for example "publish.forgebox".
 	 */
@@ -482,8 +466,7 @@ component {
 	/**
 	 * validate
 	 *
-	 * Checks the settings and explains anything that will not work. Catching it here means one
-	 * clear message instead of a confusing failure later in a build.
+	 * Validates settings before the build starts.
 	 *
 	 * @settings The settings struct to check.
 	 */
@@ -544,8 +527,8 @@ component {
 	/**
 	 * probeUrl
 	 *
-	 * The address to check when asking "is the test server up?". It is the site root, not the
-	 * test runner: asking for the runner would start the whole suite.
+	 * Returns the site URL used to check whether the test server is running.
+	 * Using the test runner URL would start the suite during the check.
 	 */
 	string function probeUrl(){
 		return reReplaceNoCase( variables.settings.testRunner, "^(https?://[^/]+).*$", "\1" ) & "/";

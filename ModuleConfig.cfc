@@ -1,21 +1,21 @@
 /**
  * errorAlerts Module Configuration
  *
- * Registers the LogBox appender and unhandled-exception interceptor. Captured
- * events pass through throttling before the configured notifier receives them.
+ * Registers the LogBox appender and the interceptor that catches unhandled
+ * exceptions. The module throttles each event before it sends a notification.
  */
 component {
 
-	// ColdBox reads these module properties during startup.
+	// ColdBox reads these properties when the module starts.
 	this.title              = "errorAlerts";
 	this.author             = "Angry Sam Productions, Inc.";
 	this.webURL             = "https://github.com/homestar9/errorAlerts";
 	this.description        = "Throttled error notifications (first-N + digest) for ColdBox apps.";
-	// Read the version from box.json so it is defined in one place.
+	// Keep the version in box.json instead of copying it here.
 	this.version            = readPackageVersion();
 	this.viewParentLookup   = false;
 	this.layoutParentLookup = false;
-	// This module has no handlers, views, or routes.
+	// The module does not provide handlers, views, or routes.
 	this.entryPoint         = "";
 	this.inheritEntryPoint  = false;
 	this.modelNamespace     = "errorAlerts";
@@ -30,33 +30,33 @@ component {
 	 * Applications can override them in config/modules/errorAlerts.cfc.
 	 */
 	function configure(){
+		var nested = nestedDefaults();
+
 		variables.settings = {
-			// Set false to load the module without registering its services.
+			// Set this to false to load the module without sending alerts.
 			enabled              : true,
-			// EmailNotifier requires a recipient. A blank value keeps it inactive.
+			// EmailNotifier stays inactive until this address is set.
 			to                   : "",
 			// A blank sender uses the recipient address.
 			from                 : "",
 			// A blank prefix uses the ColdBox application name.
 			subjectPrefix        : "",
-			// Set a WireBox ID that implements INotifier.
+			// WireBox uses this ID to find an INotifier implementation.
 			notifier             : "EmailNotifier@errorAlerts",
 			// "queue" sends later. "send" waits for email delivery.
 			deliveryMode         : "queue",
 			// Set the LogBox severity range that produces alerts.
 			levelMin             : "FATAL",
 			levelMax             : "ERROR",
-			// Limit immediate alerts for each signature during a fixed window.
-			throttle             : {
-				maxPerWindow         : 3,
-				windowSeconds        : 600,
-				maxTrackedSignatures : 500
-			},
+			// Limit immediate alerts for one error during a fixed window.
+			// nestedDefaults() lets a partial application override keep missing defaults.
+			throttle             : nested.throttle,
 			// Check expired throttle windows at this interval.
 			digestFlushSeconds   : 60,
-			/* How many distinct routes and client IPs a digest email lists from
-			 * the occurrences seen during one throttle window. Values past the
-			 * cap are counted but not listed. 0 turns sampling off. */
+			/* Limit the distinct routes and client IP addresses listed in a digest.
+			 * Extra values are counted but not listed. maskKeys cannot hide these IP
+			 * addresses because they have no field names. Set this to 0 to omit both
+			 * the route and IP address lists. */
 			digestSampleSize     : 5,
 			// Ignore category prefixes that would create duplicate or recursive
 			// alerts. Removing cbmailservices can alert on a failed alert email.
@@ -64,15 +64,12 @@ component {
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
 			// Ignore exceptions with one of these exact type values.
 			ignoreExceptionTypes : [],
-			/* ColdBox's RestHandler.onAnyOtherException() logs an exception and
-			 * then announces onException on the next line, so a REST app gets
-			 * two emails for one error. This drops the logged copy and keeps
-			 * the announced one, which is the only copy carrying a real
-			 * tagContext and so the only one that can show a stack trace and a
-			 * code snippet. ignoreCategories cannot do this, because
-			 * RestHandler logs under the calling handler's own category, which
-			 * differs for every handler. Set false only if you have
-			 * unregistered UnhandledExceptionCapture@errorAlerts. */
+			/* RestHandler reports some exceptions twice. It logs the exception and
+			 * then announces onException. Keep only the announcement because it has
+			 * the tagContext needed for stack frames and source code. Category rules
+			 * cannot find every logged copy because each handler uses a different
+			 * category. Set this to false only after unregistering
+			 * UnhandledExceptionCapture@errorAlerts. */
 			suppressDuplicateFrameworkLogs : true,
 			// Replace numbers and UUIDs before creating a signature.
 			normalizeSignatures  : true,
@@ -80,12 +77,10 @@ component {
 			maxBodyBytes         : 102400,
 			rcValueMaxLength     : 200,
 			stackFrames          : 10,
-			/* Path prefixes that mark a stack frame as application code, matched
-			 * against the path relative to the application root. When every shown
-			 * frame is framework code, the first frame matching one of these
-			 * prefixes is added to the email as the "application caller" so the
-			 * developer can see which line of their own code triggered the error.
-			 * /modules/ is deliberately absent: that is where dependencies live. */
+			/* These path prefixes mark stack frames that belong to the application.
+			 * The module compares each prefix with a path relative to the application
+			 * root. The first match becomes the "application caller" in the email.
+			 * /modules/ is excluded because that folder contains dependencies. */
 			applicationFramePrefixes : [
 				"/handlers/",
 				"/models/",
@@ -95,69 +90,63 @@ component {
 				"/interceptors/",
 				"/modules_app/"
 			],
-			/* session adds the session id so repeat alerts from one visitor can be
-			 * tied together. Off by default: a live session id in an email is
-			 * enough to impersonate that visitor. */
-			includeScopes        : { rc : true, cgi : true, extraInfo : true, session : false },
-			/* Lines of source either side of the failing line, shown in the email
-			 * the way ColdBox's Whoops page shows them. 0 turns it off. Costs one
-			 * file read per alert and puts application source in the email. */
+			/* session adds the session ID to each alert. Keep it off unless the risk
+			 * is acceptable because a live session ID may let someone impersonate
+			 * the visitor. nestedDefaults() repairs partial overrides of this struct. */
+			includeScopes        : nested.includeScopes,
+			/* Show this many source lines before and after the failing line. This
+			 * reads one file per alert and puts application source in the email.
+			 * Set this to 0 to turn source snippets off. */
 			codeSnippetLines     : 5,
-			/* Describes the logged-in user for the "user" row. Set a closure that
-			 * receives WireBox and returns a display string, or "" for nobody.
-			 * A closure keeps the module independent of any auth library:
+			/* Set a closure that receives WireBox and returns the logged-in user's
+			 * display name. Return "" when no user is logged in. A closure keeps the
+			 * module independent of any authentication library:
 			 *   userProvider : function( wirebox ){
 			 *       var auth = wirebox.getInstance( "authenticationService@cbauth" );
 			 *       return auth.isLoggedIn() ? auth.getUser().getEmail() : "";
 			 *   }
-			 * Errors thrown by the closure are swallowed, never sent. */
+			 * An error from the closure is ignored so it cannot stop an alert. */
 			userProvider         : "",
-			// Shorten file paths in the origin and stack frames by removing the
-			// application root, so a path reads "/handlers/Main.cfc". Set false to
-			// keep the full absolute path. Paths outside the application root are
-			// always shown in full either way.
+			// Remove the application root from paths in the email. Paths outside the
+			// application root always remain absolute.
 			relativePaths        : true,
-			/* Include the bound parameter values from a failed query. Best field
-			 * for reproducing a database error, but it prints whatever a visitor
-			 * typed, and maskKeys cannot filter it because the values carry no
-			 * field names. Set false to leave them out. */
+			/* Include bound SQL parameter values. These values can help reproduce a
+			 * query error. They may also contain user input that maskKeys cannot hide
+			 * because the values have no field names. */
 			includeQueryParams   : true,
-			// Also apply maskKeys to the query string shown in the Request
-			// section. Set false to print the query string exactly as sent.
-			// Turning this off can put a secret from a GET request in email.
+			// Apply the masking settings to query-string fields. Turning this off may
+			// expose a secret from a GET request.
 			maskQueryString      : true,
-			// Text shown in the Request section for a value the request did not
-			// provide. `route` and `path` are only set on routed URLs, `referer`
-			// only when the browser sent one, and forwardedFor only behind a proxy.
+			// Show this text when the request did not provide a value.
 			emptyValueText       : "N/A",
-			/* Request headers named here are shown in the Request section, matched
-			 * ignoring case. Cookie and Authorization are never included, even
-			 * when listed here: both carry credentials. */
+			/* Show these request headers, ignoring case. Cookie, Authorization, and
+			 * Proxy-Authorization are always blocked because they carry credentials. */
 			includeHeaders       : [ "Content-Type" ],
-			/* Include the raw request body in the email. Off by default. A JSON or
-			 * API request puts its payload in the body, not in rc, so a failing
-			 * API call is otherwise invisible. JSON bodies get their top-level
-			 * fields masked with maskKeys. Form posts are skipped because the rc
-			 * table already shows those fields, masked. */
+			/* Include request bodies that are not form posts. JSON objects and arrays
+			 * are walked so fields can be masked at any depth. JSON that cannot be
+			 * walked is reported by size. A non-JSON body is shown as sent because it
+			 * has no field names for maskKeys to match. */
 			includeRequestBody   : false,
 			// Cap the request body at this many characters.
 			requestBodyMaxLength : 4000,
-			/* Mask the value of any rc key or query string field named here.
-			 * The match is exact apart from case, so every field an application
-			 * wants hidden must be listed by its real name. `password` does not
-			 * cover `newPassword`. These defaults are only the common names —
-			 * check the actual form field names in your own app and add them. */
-			maskKeys             : [
-				"password",
-				"passwd",
-				"token",
-				"secret",
-				"apikey",
-				"api_key",
-				"authorization",
-				"creditcard",
-				"cvv"
-			]
+			/* Mask matching field values in rc, JSON bodies, extraInfo, and query
+			 * strings. Matching is exact and ignores case. For example, `password`
+			 * does not match `newPassword`. Masking is off by default because each
+			 * application uses different field names. The README has a starter list. */
+			maskKeys             : [],
+			/* Try these wildcard patterns when maskKeys has no exact match. `*`
+			 * matches any number of characters. Matching ignores case and covers the
+			 * whole field name. Keep patterns narrow so useful fields stay visible. */
+			maskKeyPatterns      : [],
+			/* Limit each string inside extraInfo or a JSON body. Longer strings keep
+			 * their beginning and show their original size. Set this to 0 to disable
+			 * this limit. The limits for complete sections still apply. */
+			longValueMaxLength   : 500,
+			/* Do not apply longValueMaxLength to these exact key names. Matching
+			 * ignores case. The defaults keep useful stack frames from being cut off. */
+			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
+			// Cap the sanitized extraInfo output at this many characters.
+			extraInfoMaxLength   : 2000
 		};
 	}
 
@@ -169,6 +158,10 @@ component {
 	 */
 	function onLoad(){
 		var moduleSettings = controller.getSetting( "moduleSettings" ).errorAlerts;
+
+		/* Repair partial nested settings before any service reads them. The
+		 * scheduler can load CaptureService even when alerts are inactive. */
+		applyNestedDefaults( moduleSettings );
 
 		if ( !isActive( moduleSettings ) ) {
 			return;
@@ -183,8 +176,8 @@ component {
 		);
 		logBox.getRootLogger().addAppender( logBox.getAppenderRegistry()[ "errorAlerts" ] );
 
-		/* A custom ColdBox exceptionHandler prevents Bootstrap from logging the
-		 * exception, so the appender cannot capture that exception on its own. */
+		/* A custom ColdBox exceptionHandler stops Bootstrap from logging the
+		 * exception. This interceptor captures that exception instead. */
 		controller.getInterceptorService().registerInterceptor(
 			interceptorClass = "errorAlerts.interceptors.UnhandledExceptionCapture",
 			interceptorName  = "UnhandledExceptionCapture@errorAlerts"
@@ -205,6 +198,59 @@ component {
 		try {
 			controller.getInterceptorService().unregister( "UnhandledExceptionCapture@errorAlerts" );
 		} catch ( any e ) {
+		}
+	}
+
+	/**
+	 * nestedDefaults
+	 *
+	 * Returns fresh defaults for settings that contain nested structs.
+	 * configure() uses the values as defaults. onLoad() uses the same values to
+	 * repair partial application overrides.
+	 */
+	private struct function nestedDefaults(){
+		return {
+			throttle      : {
+				maxPerWindow         : 3,
+				windowSeconds        : 600,
+				maxTrackedSignatures : 500
+			},
+			includeScopes : {
+				rc        : true,
+				cgi       : true,
+				extraInfo : true,
+				session   : false
+			}
+		};
+	}
+
+	/**
+	 * applyNestedDefaults
+	 *
+	 * Restores keys that a partial `throttle` or `includeScopes` override removed.
+	 *
+	 * ColdBox replaces a nested struct instead of merging its keys. Missing keys
+	 * can stop alert building or disable throttling. This method updates the same
+	 * settings struct that WireBox injects into each service. Existing override
+	 * values are not changed.
+	 *
+	 * @settings The merged module settings struct, modified in place.
+	 */
+	private void function applyNestedDefaults( required struct settings ){
+		var defaults = nestedDefaults();
+
+		for ( var name in defaults ) {
+			// Replace a missing or invalid nested struct with all of its defaults.
+			if (
+				!structKeyExists( arguments.settings, name )
+				|| !isStruct( arguments.settings[ name ] )
+			) {
+				arguments.settings[ name ] = defaults[ name ];
+				continue;
+			}
+
+			// false adds missing keys without replacing application overrides.
+			structAppend( arguments.settings[ name ], defaults[ name ], false );
 		}
 	}
 
@@ -257,7 +303,7 @@ component {
 	 * readPackageVersion
 	 *
 	 * Reads the module version from box.json.
-	 * This must run before configure() because ColdBox reads this.version first.
+	 * ColdBox reads this.version before configure(), so this method runs early.
 	 * Returns an empty string when box.json cannot be read.
 	 */
 	private string function readPackageVersion(){

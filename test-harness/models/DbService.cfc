@@ -3,14 +3,11 @@
  *
  * Runs the failing queries used by the database scenarios.
  *
- * Application.cfc declares two in-memory datasources because no engine here
- * ships both drivers: Adobe gets Derby from `cfpm install derby` and Lucee 6
- * bundles HSQLDB. This component tries each one once, keeps whichever
- * connects, and creates a small `orders` table to fail against.
+ * Application.cfc declares Derby and HSQLDB datasources. This service tries
+ * both, keeps the first one that connects, and creates an orders table.
  *
- * When neither driver is present, `getDatasource()` returns an empty string.
- * The Trigger handler checks that and falls back to the portable scenarios,
- * which still produce real database exceptions on any engine.
+ * If neither driver exists, getDatasource() returns an empty string. Trigger
+ * can then use database failures that work without an installed driver.
  */
 component singleton {
 
@@ -55,9 +52,8 @@ component singleton {
 	/**
 	 * describe
 	 *
-	 * Returns a short line about which datasource is in use, for the catalog page.
-	 * When nothing connected it includes why each one failed, because the usual
-	 * cause is a missing JDBC driver and the message says so.
+	 * Describes the selected datasource for the catalog page.
+	 * Includes connection errors when no datasource worked.
 	 */
 	string function describe(){
 		var name = getDatasource();
@@ -183,9 +179,7 @@ component singleton {
 	/**
 	 * requireDatasource
 	 *
-	 * Returns the working datasource name or throws a clear message when no
-	 * driver is installed. Without this the engine's own error would be about a
-	 * missing datasource, which hides the real reason.
+	 * Returns the working datasource name or explains that no driver is installed.
 	 */
 	private string function requireDatasource(){
 		var name = getDatasource();
@@ -202,21 +196,15 @@ component singleton {
 	/**
 	 * createDerbyDatabase
 	 *
-	 * Creates the in-memory Derby database by opening one direct JDBC connection
-	 * with `create=true`, then closing it.
+	 * Creates the in-memory Derby database through one direct JDBC connection.
 	 *
-	 * This is needed because Adobe builds the Derby url from a fixed template in
-	 * WEB-INF/cfusion/lib/neo-drivers.xml and drops any extra keys, so there is
-	 * no way to get `create=true` in from `this.datasources`. Without an existing
-	 * database the datasource fails with "Database 'memory:harness' not found".
-	 * Once the database exists in this JVM the datasource attaches to it fine.
+	 * Adobe's datasource configuration does not pass create=true to Derby. The
+	 * direct connection creates the database before the datasource uses it.
 	 *
-	 * The driver object is used directly instead of DriverManager. cfpm installs
-	 * Derby as an OSGi bundle, which never registers itself with DriverManager,
-	 * so DriverManager.getConnection() answers "No suitable driver found".
+	 * cfpm installs Derby as an OSGi bundle that DriverManager cannot find. The
+	 * code calls the driver object directly.
 	 *
-	 * Failures are recorded and then ignored. When the driver is missing
-	 * altogether the datasource probe reports that on its own.
+	 * A failure is recorded and the normal datasource probe continues.
 	 */
 	private void function createDerbyDatabase(){
 		try {
@@ -231,10 +219,9 @@ component singleton {
 	/**
 	 * setupSchema
 	 *
-	 * Creates the orders table on a candidate datasource and confirms it can be
-	 * read back. Returns false when the driver is missing or the database cannot
-	 * be reached. A "table already exists" error is fine, so the create is run
-	 * first and the select decides.
+	 * Creates and reads the orders table on a candidate datasource.
+	 * The final read decides whether the datasource works. A table that already
+	 * exists is accepted.
 	 *
 	 * @datasource The datasource name to try.
 	 */

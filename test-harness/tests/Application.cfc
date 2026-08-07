@@ -8,7 +8,7 @@ component {
 	// Name the module's repository directory.
 	request.MODULE_PATH = "errorAlerts";
 
-	// Configure the test application.
+	// Enable sessions for tests that inspect session behavior.
 	this.name               = "#request.MODULE_NAME#-testing-suite";
 	this.sessionManagement  = true;
 	this.sessionTimeout     = createTimespan( 0, 0, 15, 0 );
@@ -31,10 +31,17 @@ component {
 	this.mappings[ "/moduleroot" ]            = moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] = moduleRootPath & "#request.MODULE_PATH#";
 
+	/**
+	 * onRequestStart
+	 *
+	 * Starts a ColdBox virtual application for a test request.
+	 *
+	 * @targetPage The requested test template.
+	 */
 	public boolean function onRequestStart( required targetPage ){
 		// Allow enough time for the complete suite.
 		setting requestTimeout   ="9999";
-		// Create a virtual application for this request.
+		// Isolate the test suite from any other ColdBox application.
 		request.coldBoxVirtualApp = new coldbox.system.testing.VirtualApp( appMapping = "/root" );
 
 		// Start the virtual application for test runner and spec requests.
@@ -53,6 +60,13 @@ component {
 		return true;
 	}
 
+	/**
+	 * onRequestEnd
+	 *
+	 * Shuts down the ColdBox virtual application after a test request.
+	 *
+	 * @targetPage The requested test template.
+	 */
 	public void function onRequestEnd( required targetPage ){
 		request.coldBoxVirtualApp.shutdown();
 	}

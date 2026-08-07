@@ -3,17 +3,15 @@
  *
  * Run it with: box run-script release:check
  *
- * It runs every check a release runs, plus a few more, and reports all of them instead of
- * stopping at the first problem. Each failure comes with the command that fixes it. Nothing
- * here changes anything, so it is always safe to run.
+ * Runs all release checks and reports every result. A failure includes a command
+ * or instruction for fixing it. The task does not change the project.
  */
 component {
 
 	/**
 	 * init
 	 *
-	 * Loads the settings. A broken build.json is reported rather than thrown, because telling
-	 * someone their config is wrong is exactly this task's job.
+	 * Loads settings and records an invalid build.json as a failed check.
 	 */
 	function init(){
 		variables.configError = "";
@@ -61,13 +59,12 @@ component {
 		}
 	}
 
-	/********************************************* CHECKS *********************************************/
+	/******************************** Checks ********************************/
 
 	/**
 	 * checkConfig
 	 *
-	 * Reports the settings a release will use, so surprises show up here rather than mid
-	 * release.
+	 * Reports the settings that the release will use.
 	 */
 	private function checkConfig(){
 		print.line().boldLine( "Settings" ).toConsole();
@@ -142,8 +139,7 @@ component {
 			report( true, "version", "#tagName# has not been released" );
 		}
 
-		// Reaching the remote is what catches a missing or rejected SSH key, which otherwise
-		// only shows up part way through a release.
+		// Contact the remote now so an SSH problem does not appear during release.
 		var remote = variables.config.execNative( "git", [ "ls-remote", "--exit-code", "origin", "HEAD" ] );
 		if ( remote.exitCode != 0 ) {
 			var hint = remote.output contains "publickey"
@@ -289,7 +285,7 @@ component {
 		}
 	}
 
-	/********************************************* OUTPUT *********************************************/
+	/******************************** Output ********************************/
 
 	/**
 	 * report

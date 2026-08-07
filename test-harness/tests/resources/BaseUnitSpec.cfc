@@ -62,6 +62,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			includeHeaders       : [ "Content-Type" ],
 			includeRequestBody   : false,
 			requestBodyMaxLength : 4000,
+			// Use explicit keys so unit tests exercise masking, which is off by default.
 			maskKeys             : [
 				"password",
 				"passwd",
@@ -72,7 +73,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 				"authorization",
 				"creditcard",
 				"cvv"
-			]
+			],
+			maskKeyPatterns      : [],
+			longValueMaxLength   : 500,
+			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
+			extraInfoMaxLength   : 2000
 		};
 	}
 
@@ -120,12 +125,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	/**
 	 * newRestHandlerExtraInfo
 	 *
-	 * Builds the extraInfo struct that ColdBox's RestHandler passes to its own
-	 * logger from both onAnyOtherException() and onError(). Note the underscore
-	 * in `_stacktrace` and the absence of `tagContext`, which is why this shape
-	 * produces no stack frames and no code snippet in an alert. The httpData
-	 * value comes from getHTTPRequestData( false ), which omits the body but
-	 * still carries every request header.
+	 * Builds the extraInfo shape that RestHandler logs for two error paths.
+	 * The value has _stacktrace and httpData but no tagContext. This means the
+	 * logged copy cannot provide stack frames or source code.
 	 *
 	 * @authorization The Authorization header value to place in httpData.
 	 */
@@ -147,11 +149,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	/**
 	 * newDeepExceptionInfo
 	 *
-	 * Builds exception data with a deep stack: the first eleven frames are
-	 * framework and dependency code (including one driver frame), the first
-	 * application-owned frame sits at position 13, past the default ten-frame
-	 * display cap. Mirrors a real ORM failure, where the application's own
-	 * view or handler is buried under module frames.
+	 * Builds exception data with an application frame after the display limit.
+	 * Framework, dependency, and driver frames come first. This matches an ORM
+	 * failure that buries the application caller deep in the stack.
 	 *
 	 * @callerTemplate The application frame's template path.
 	 * @callerLine     The application frame's line.

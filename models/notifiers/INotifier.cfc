@@ -1,12 +1,12 @@
 /**
  * INotifier
  *
- * Defines notification delivery. CaptureService passes an "error" or "digest"
+ * Defines notification delivery. CaptureService passes an error or digest
  * payload from PayloadBuilder to sendNotification().
  *
- * Implementations must handle their own failures and must not log them at
+ * Implementations must handle their own failures. They must not log failures at
  * ERROR because that can call ErrorAlertAppender again. CaptureService catches
- * thrown failures as a final safeguard.
+ * any failure that still escapes.
  */
 interface {
 

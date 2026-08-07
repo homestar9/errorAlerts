@@ -1,9 +1,9 @@
 /**
  * CaptureService
  *
- * Processes captured log events and sends approved notifications.
- * Failures go to System.err so they cannot break the request or create another
- * LogBox event.
+ * Filters and throttles captured log events before sending notifications.
+ * Internal failures go to System.err. This keeps them out of the request and
+ * prevents another LogBox event.
  */
 component singleton accessors="true" {
 
@@ -136,24 +136,17 @@ component singleton accessors="true" {
 	/**
 	 * isDuplicateFrameworkLog
 	 *
-	 * Checks whether this log event is ColdBox's RestHandler logging an
-	 * exception that it announces as onException on the very next line. The
-	 * module's interceptor captures that announcement, so without this check a
-	 * REST application receives two emails for one exception.
+	 * Checks whether RestHandler will report this log event again through
+	 * onException. The interceptor captures the second report, so keeping both
+	 * would send two emails.
 	 *
-	 * The logged copy is the one dropped, because the announced copy is better.
-	 * RestHandler passes { _stacktrace, httpData } as extraInfo. That struct has
-	 * no tagContext, so SignatureService.topFrame() and applicationFrame() both
-	 * return an empty string, PayloadBuilder renders no stack trace and no code
-	 * snippet, and FrameClassifier never runs. The interceptor passes the real
-	 * cfcatch, which has all of that.
+	 * The onException report is kept because its tagContext provides stack frames
+	 * and source code. The logged copy only has _stacktrace and httpData.
 	 *
-	 * The message prefix is matched on purpose. RestHandler.onError() logs the
-	 * same { _stacktrace, httpData } shape but does NOT announce onException, so
-	 * matching on the struct shape alone would drop those alerts with nothing
-	 * left to report them. If ColdBox changes this message text, the check stops
-	 * matching and the duplicate email returns, which is noticed right away. It
-	 * cannot cause a lost alert.
+	 * The message prefix separates these duplicates from RestHandler.onError().
+	 * onError() uses the same extraInfo fields but does not announce onException.
+	 * Matching only the fields would cause a lost alert. If ColdBox changes the
+	 * message, this check may allow a duplicate but will not drop the only copy.
 	 *
 	 * @logEvent The LogBox LogEvent to test.
 	 */
@@ -174,21 +167,16 @@ component singleton accessors="true" {
 			return false;
 		}
 
-		// findNoCase() == 1 rather than left( 14 ): on Adobe ColdFusion left()
-		// throws when the string is shorter than the requested length, and a log
-		// message can be shorter than the prefix.
+		// findNoCase() == 1 means the message starts with this text.
 		return arguments.logEvent.getMessage().findNoCase( "Error calling " ) == 1;
 	}
 
 	/**
 	 * buildSnapshot
 	 *
-	 * Returns the event fields needed to create a later digest, plus the route
-	 * and client address of this occurrence. ThrottleService keeps a small
-	 * distinct-value sample of those two across the window, so the digest can
-	 * say "3 routes from 1 client IP" - the difference between a crawler and a
-	 * broken page. Each read is wrapped so a missing request context only
-	 * leaves the field blank.
+	 * Returns the event details needed for a later digest.
+	 * The route and client address help show whether failures came from one page
+	 * or many requests. A missing request context leaves those fields blank.
 	 *
 	 * @logEvent The LogBox LogEvent being recorded.
 	 */

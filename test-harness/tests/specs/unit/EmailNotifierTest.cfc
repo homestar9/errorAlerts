@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines EmailNotifier unit tests.
+	 */
 	function run(){
 		describe( "EmailNotifier", function(){
 			beforeEach( function(){

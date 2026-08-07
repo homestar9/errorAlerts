@@ -1,8 +1,8 @@
 /**
  * Trigger
  *
- * One action per failure scenario. Hitting an action produces one kind of
- * error so the resulting alert email can be read and compared.
+ * Provides one action for each failure scenario.
+ * Each action creates a specific error for checking the resulting alert.
  *
  * Scenarios fall into four groups:
  *
@@ -12,8 +12,8 @@
  *   - Manual LogBox calls, which reach the module through its appender.
  *   - Throttling, digest and email-rendering checks.
  *
- * Actions that are meant to alert do not catch anything. Actions that are meant
- * to return a page describe what they did instead.
+ * Actions that should create alerts let errors escape. Other actions return a
+ * short description of what they did.
  */
 component {
 
@@ -25,6 +25,10 @@ component {
 	 * index
 	 *
 	 * Sends visitors to the catalog page on Main.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function index( event, rc, prc ){
 		relocate( "main.index" );
@@ -38,6 +42,10 @@ component {
 	 * handlerThrow
 	 *
 	 * Throws straight from the action, so the stack is short.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function handlerThrow( event, rc, prc ){
 		throw(
@@ -51,6 +59,10 @@ component {
 	 * modelThrow
 	 *
 	 * Fails two components below the handler, in PaymentGateway.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function modelThrow( event, rc, prc ){
 		return orders.placeOrder( customerId = "cust-4471", total = 149.99 );
@@ -60,6 +72,10 @@ component {
 	 * deepStack
 	 *
 	 * Fails 25 frames down, so the email should show only the first 10.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function deepStack( event, rc, prc ){
 		return reportBuilder.build( 25 );
@@ -69,6 +85,10 @@ component {
 	 * undefinedVariable
 	 *
 	 * Reads a variable that was never set.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function undefinedVariable( event, rc, prc ){
 		return orders.readMissingSetting();
@@ -78,6 +98,10 @@ component {
 	 * typeMismatch
 	 *
 	 * Passes text to an argument declared numeric.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function typeMismatch( event, rc, prc ){
 		return orders.applyDiscount( total = 100, percent = "twenty percent" );
@@ -87,6 +111,10 @@ component {
 	 * divideByZero
 	 *
 	 * Divides by zero inside a model.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function divideByZero( event, rc, prc ){
 		return orders.divide( top = 100, bottom = 0 );
@@ -96,6 +124,10 @@ component {
 	 * missingMethod
 	 *
 	 * Calls a method OrderService does not have.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function missingMethod( event, rc, prc ){
 		return orders.shipEverythingImmediately();
@@ -105,6 +137,10 @@ component {
 	 * arrayIndex
 	 *
 	 * Reads position 99 of a two-item array.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function arrayIndex( event, rc, prc ){
 		return orders.lineItem( 99 );
@@ -114,6 +150,10 @@ component {
 	 * nullReference
 	 *
 	 * Calls a method on a lookup that returned nothing.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function nullReference( event, rc, prc ){
 		var customer = orders.findCustomer( "cust-does-not-exist" );
@@ -124,6 +164,10 @@ component {
 	 * viewError
 	 *
 	 * Renders a view that throws part-way through, after some output.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function viewError( event, rc, prc ){
 		prc.invoiceNumber = "INV-20873";
@@ -135,6 +179,10 @@ component {
 	 * layoutError
 	 *
 	 * Renders a working view inside a layout that throws.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function layoutError( event, rc, prc ){
 		prc.title = "Quarterly summary";
@@ -147,6 +195,10 @@ component {
 	 *
 	 * Sends the request back through preEvent with the failure flag set, so
 	 * HarnessFailure throws before any action runs.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function interceptorThrow( event, rc, prc ){
 		if ( !rc.keyExists( "harnessFail" ) ) {
@@ -160,6 +212,10 @@ component {
 	 * wireboxThrow
 	 *
 	 * Builds a component whose init() throws, so WireBox fails.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function wireboxThrow( event, rc, prc ){
 		return getInstance( "BrokenService" );
@@ -170,6 +226,10 @@ component {
 	 *
 	 * Throws a type you can add to `ignoreExceptionTypes` to confirm the setting
 	 * stops the alert.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function customType( event, rc, prc ){
 		throw(
@@ -182,9 +242,13 @@ component {
 	/**
 	 * wrappedCause
 	 *
-	 * Throws a high-level error that carries the low-level one that caused it.
-	 * PayloadBuilder does not read an exception's `cause`, so PaymentGateway puts
-	 * the original error in `extendedInfo` and this shows how that reads.
+	 * Throws a high-level error with the low-level error in extendedInfo.
+	 * PaymentGateway uses extendedInfo because Adobe does not support the cause
+	 * argument that Lucee provides.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function wrappedCause( event, rc, prc ){
 		return orders.cancelOrder( "88213" );
@@ -194,6 +258,10 @@ component {
 	 * fileNotFound
 	 *
 	 * Reads a file that is not there.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function fileNotFound( event, rc, prc ){
 		return fileRead( expandPath( "/root/config/this-file-does-not-exist.json" ) );
@@ -203,6 +271,10 @@ component {
 	 * httpFailure
 	 *
 	 * Calls a closed port and turns the failed response into an exception.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function httpFailure( event, rc, prc ){
 		cfhttp(
@@ -219,6 +291,10 @@ component {
 	 * timeoutError
 	 *
 	 * Throws the kind of error a slow dependency produces.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function timeoutError( event, rc, prc ){
 		throw(
@@ -233,6 +309,10 @@ component {
 	 * noSuchAction
 	 *
 	 * Sends the request to an action this handler does not have.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function noSuchAction( event, rc, prc ){
 		relocate( "trigger.thisActionWasNeverWritten" );
@@ -242,6 +322,10 @@ component {
 	 * invalidEvent
 	 *
 	 * Sends the request to a handler that does not exist.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function invalidEvent( event, rc, prc ){
 		relocate( "noSuchHandler.noSuchAction" );
@@ -255,6 +339,10 @@ component {
 	 * dbSyntax
 	 *
 	 * Runs SQL the database cannot parse.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbSyntax( event, rc, prc ){
 		return db.syntaxError();
@@ -264,6 +352,10 @@ component {
 	 * dbMissingTable
 	 *
 	 * Selects from a table that does not exist.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbMissingTable( event, rc, prc ){
 		return db.missingTable();
@@ -273,6 +365,10 @@ component {
 	 * dbMissingColumn
 	 *
 	 * Selects a column the table does not have.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbMissingColumn( event, rc, prc ){
 		return db.missingColumn();
@@ -282,6 +378,10 @@ component {
 	 * dbConstraint
 	 *
 	 * Inserts a duplicate primary key.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbConstraint( event, rc, prc ){
 		return db.constraintViolation();
@@ -291,6 +391,10 @@ component {
 	 * dbInTransaction
 	 *
 	 * Fails on the second insert inside a transaction, so the first rolls back.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbInTransaction( event, rc, prc ){
 		return db.transactionFailure();
@@ -300,6 +404,10 @@ component {
 	 * dbBadParam
 	 *
 	 * Binds text to an integer query parameter.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbBadParam( event, rc, prc ){
 		return db.badParameter();
@@ -309,6 +417,10 @@ component {
 	 * dbNoDatasource
 	 *
 	 * Queries a datasource name that was never declared. Works on every engine.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbNoDatasource( event, rc, prc ){
 		return db.undefinedDatasource();
@@ -318,6 +430,10 @@ component {
 	 * dbDeadHost
 	 *
 	 * Queries a datasource pointed at a closed port.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function dbDeadHost( event, rc, prc ){
 		return db.deadConnection();
@@ -332,6 +448,10 @@ component {
 	 *
 	 * Logs an error with no exception attached, so the email has no Exception
 	 * section.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logError( event, rc, prc ){
 		logger( "orders.checkout" ).error(
@@ -344,6 +464,10 @@ component {
 	 * logErrorWithException
 	 *
 	 * Catches an exception and logs it, which is the common pattern in real code.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logErrorWithException( event, rc, prc ){
 		try {
@@ -359,6 +483,10 @@ component {
 	 *
 	 * Passes a plain struct as extraInfo, which fills the Extra info section
 	 * rather than the Exception section.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logErrorWithData( event, rc, prc ){
 		logger( "orders.reconciliation" ).error(
@@ -379,6 +507,10 @@ component {
 	 * logFatal
 	 *
 	 * Logs at FATAL, the top of the alerting range.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logFatal( event, rc, prc ){
 		logger( "scheduler.nightlyBilling" ).fatal(
@@ -391,6 +523,10 @@ component {
 	 * logWarn
 	 *
 	 * Logs below the alerting range. This must not produce an email.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logWarn( event, rc, prc ){
 		logger( "orders.checkout" ).warn( "Payment retried once before succeeding" );
@@ -401,6 +537,10 @@ component {
 	 * logInfo
 	 *
 	 * Logs well below the alerting range. This must not produce an email.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logInfo( event, rc, prc ){
 		logger( "orders.checkout" ).info( "Order 12345 completed" );
@@ -412,6 +552,10 @@ component {
 	 *
 	 * Logs an error under a category that starts with an ignored prefix. This
 	 * must not produce an email.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logIgnoredCategory( event, rc, prc ){
 		logger( "cbmailservices.harness" ).error( "Alert email itself failed to send" );
@@ -421,13 +565,15 @@ component {
 	/**
 	 * logFromThread
 	 *
-	 * Logs an error from a background thread, where there is no request context.
-	 * PayloadBuilder should return empty request and rc sections instead of
-	 * failing.
+	 * Logs an error from a background thread with no request context.
+	 * The alert should use empty request and rc sections.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function logFromThread( event, rc, prc ){
-		/* Threads cannot see the enclosing variables scope, so the logger is
-		 * passed in as a thread attribute. */
+		// Pass the logger as an attribute because the thread cannot use variables.
 		var jobLogger = logger( "jobs.import" );
 
 		thread name="harnessBackgroundFailure" jobLogger=jobLogger {
@@ -455,6 +601,10 @@ component {
 	 *
 	 * Logs the same error ten times. The first three alert and the rest are
 	 * counted for the digest.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function burst( event, rc, prc ){
 		for ( var i = 1; i <= 10; i++ ) {
@@ -470,6 +620,10 @@ component {
 	 *
 	 * Logs ten errors that differ only by numbers and ids. Signature
 	 * normalization should treat them as one error.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function burstVariants( event, rc, prc ){
 		for ( var i = 1; i <= 10; i++ ) {
@@ -486,6 +640,10 @@ component {
 	 * burstDistinct
 	 *
 	 * Logs five genuinely different errors, so each gets its own window.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function burstDistinct( event, rc, prc ){
 		var messages = [
@@ -506,6 +664,10 @@ component {
 	 *
 	 * Sends the digest for any window that has already expired, instead of
 	 * waiting for the scheduler.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function flushDigest( event, rc, prc ){
 		getInstance( "CaptureService@errorAlerts" ).flushDigests();
@@ -515,9 +677,12 @@ component {
 	/**
 	 * throttleStatus
 	 *
-	 * Prints the settings that decide how many alerts get through, plus the
-	 * current mailer. Sends nothing. ThrottleService keeps its windows private,
-	 * so the counts themselves are not listed here.
+	 * Shows throttle settings and the current mailer without sending an alert.
+	 * ThrottleService keeps its live window counts private.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function throttleStatus( event, rc, prc ){
 		var settings = getSetting( "moduleSettings" ).errorAlerts;
@@ -546,6 +711,10 @@ component {
 	 * reset
 	 *
 	 * Clears every throttle window and empties the in-memory mailbox.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function reset( event, rc, prc ){
 		getInstance( "ThrottleService@errorAlerts" ).reset();
@@ -565,6 +734,10 @@ component {
 	 *
 	 * Fails with sensitive-looking values in the request collection, so the
 	 * email can be checked for masking.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function maskedRc( event, rc, prc ){
 		rc.password         = "hunter2";
@@ -583,10 +756,48 @@ component {
 	}
 
 	/**
+	 * nestedSecrets
+	 *
+	 * Logs nested secrets and a large base64 value in extraInfo and rc.
+	 * The alert demonstrates nested masking, value limits, and bounded processing.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
+	 */
+	function nestedSecrets( event, rc, prc ){
+		rc.profile = { name : "Ada Lovelace", ssn : "123-45-6789", password : "hunter2" };
+
+		logger( "orders.documents" ).error(
+			"Contract PDF generation failed",
+			{
+				"document" : {
+					"fileName"    : "contract.pdf",
+					"fileContent" : toBase64( repeatString( "fake-pdf-bytes-", 20000 ) )
+				},
+				"vendorAuth" : {
+					"apikey"   : "sk-live-9f3a2b71c4d8",
+					"endpoint" : "https://api.example.com/charge"
+				}
+			}
+		);
+		return sent(
+			"one error with nested secrets and a ~400 KB base64 blob. In the email: " &
+			"vendorAuth.apikey and rc.profile.password read *** masked ***, fileContent " &
+			"shows a 500-character prefix plus a size label, and rc.profile.ssn stays " &
+			"readable because the harness never added ssn to maskKeys - masking is opt-in"
+		);
+	}
+
+	/**
 	 * messyRc
 	 *
 	 * Fails with awkward value types in the request collection, so every branch
 	 * of the sanitizer can be seen at once.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function messyRc( event, rc, prc ){
 		rc.longText   = repeatString( "The quick brown fox jumps over the lazy dog. ", 120 );
@@ -613,6 +824,10 @@ component {
 	 *
 	 * Puts markup in the exception message and the request collection so the
 	 * email can be checked for escaping.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function htmlInjection( event, rc, prc ){
 		rc.searchTerm = "<img src=x onerror=alert(1)>";
@@ -627,6 +842,10 @@ component {
 	 * unicode
 	 *
 	 * Fails with non-ASCII text so the email charset can be checked.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function unicode( event, rc, prc ){
 		rc.customerName = "Zoë Müller-Škoda";
@@ -640,9 +859,12 @@ component {
 	/**
 	 * hugeMessage
 	 *
-	 * Fails with a message and detail far larger than the email can hold, so the
-	 * clipping can be seen. EmailRenderer caps the message section at 2048
-	 * characters, which happens long before the maxBodyBytes budget matters.
+	 * Uses an oversized message and detail to show output truncation.
+	 * EmailRenderer limits the message section before the full email limit applies.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function hugeMessage( event, rc, prc ){
 		throw(
@@ -660,6 +882,10 @@ component {
 	 *
 	 * Fails on a POST so the email shows POST as the request method and the form
 	 * fields in the request collection. The catalog page posts to this action.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function postForm( event, rc, prc ){
 		throw(
@@ -676,9 +902,9 @@ component {
 	/**
 	 * logger
 	 *
-	 * Returns a LogBox logger for any category. Handlers only get `variables.log`,
-	 * which is named after the handler, and these scenarios need categories that
-	 * look like real application code.
+	 * Returns a LogBox logger for a specific category.
+	 * The injected handler logger cannot provide the different categories needed
+	 * by these scenarios.
 	 *
 	 * @category The logger category name.
 	 */

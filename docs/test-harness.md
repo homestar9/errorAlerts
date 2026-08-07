@@ -75,9 +75,14 @@ immediately rather than waiting for the scheduler. `/trigger/reset` clears every
 throttle window.
 
 **Email content checks** exist to be read rather than counted — masking of
-sensitive `rc` keys, awkward value types in `rc`, markup that must not render as
+sensitive `rc` keys, secrets nested inside containers next to a ~400 KB base64
+blob (`/trigger/nestedSecrets`, which must also build its alert without a
+noticeable pause), awkward value types in `rc`, markup that must not render as
 markup, non-ASCII text, an oversized message, and a POST so the Request section
-shows something other than GET.
+shows something other than GET. The module ships with an empty `maskKeys` —
+masking is opt-in — so the harness opts in through its own `moduleSettings` in
+[config/Coldbox.cfc](../test-harness/config/Coldbox.cfc); that list is what the
+masking routes and the TestBox specs rely on.
 
 ## What a run on Adobe 2023 showed
 
@@ -89,8 +94,40 @@ run:
   while the Request section above it printed `cgi.query_string` verbatim. The
   `maskQueryString` setting (on by default) now applies `maskKeys` to the query
   string row. Note that matching is exact since 2.1.0: `creditCardNumber` is
-  only masked if the app lists it - the default entry `creditcard` no longer
-  covers it by substring.
+  only masked if the app lists it - the entry `creditcard` does not cover it by
+  substring. The harness config lists `creditCardNumber` explicitly, which is
+  why `/trigger/maskedRc` masks it; since `maskKeys` became empty by default,
+  every masked name on that route comes from the harness's own opt-in list.
+- **The budget-bounded sanitizer removed the large-payload cost.** The benchmark
+  suite at `tests/specs/perf/PayloadBuilderBenchmarkTest.cfc`
+  (`?directory=tests.specs.perf`) was run on Lucee 5.4.8 before and after the
+  sanitizer rework, five runs per scenario, average shown:
+
+  | Scenario | Before | After |
+  | --- | --- | --- |
+  | 5 MB string in extraInfo | 47 ms | 3 ms |
+  | 20,000-key flat struct | 63 ms | 4 ms |
+  | 500 KB JSON body | 30 ms | 24 ms |
+  | 5 MB string with 17 maskKeys + 2 patterns | 54 ms | 1 ms |
+  | 1,000 structs x 10 keys, 100 maskKeys + 10 patterns | 59 ms | 2 ms |
+  | Small baseline payload | 2 ms | 2 ms |
+
+  The JSON-body scenario keeps most of its cost because `deserializeJSON` on a
+  500 KB body runs before the walk and is unavoidable. The heavy mask
+  configurations now cost less than the unmasked runs did, because the walk
+  stops as soon as the email's budget is full.
+- **Compiling the mask configuration once per alert removed the wide-`rc` cost.**
+  `ensureMaskConfig()` used to run once per `rc` key and once per header, and
+  each call rebuilt a fingerprint from three list joins. Scenario (d), an `rc`
+  with 100 keys, went from min 7 ms / avg 10 ms to min 2-4 ms / avg 4 ms.
+
+  Read the numbers above as a comparison, not as absolute figures for your
+  machine. Timings on a developer laptop move by a factor of three between runs
+  depending on JIT warm-up and what else is running, and the 500 KB JSON
+  scenario is the worst of them: it was measured at 18 ms and at 71 ms within
+  the same five-run batch. Compare a before and an after taken back to back on
+  one machine, in the same JVM, after two warm-up runs. Anything else is
+  measuring the laptop.
 - **A REST handler failure alerted twice before 2.4.0.** `/api/boom` produced two
   emails. `RestHandler.aroundHandler()` catches whatever the action throws and
   calls `onAnyOtherException()`, which logs at ERROR under the `handlers.Api`

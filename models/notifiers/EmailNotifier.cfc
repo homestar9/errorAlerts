@@ -1,8 +1,8 @@
 /**
  * EmailNotifier
  *
- * Renders notification payloads and delivers them through cbmailservices.
- * Queue mode sends later, while send mode waits for delivery.
+ * Renders notification payloads and sends them through cbmailservices.
+ * Queue mode sends later. Send mode waits for delivery.
  */
 component singleton accessors="true" implements="errorAlerts.models.notifiers.INotifier" {
 
@@ -25,7 +25,7 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	 * sendNotification
 	 *
 	 * Builds and delivers one alert or digest email.
-	 * Mail failures go to System.err so they cannot break the request or create
+	 * Mail failures go to System.err. They cannot break the request or create
 	 * another LogBox error.
 	 *
 	 * @payload The payload struct from PayloadBuilder.

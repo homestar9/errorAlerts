@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines CaptureService unit tests.
+	 */
 	function run(){
 		describe( "CaptureService", function(){
 			beforeEach( function(){
@@ -69,11 +74,8 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			describe( "duplicate framework logs", function(){
-				/* ColdBox's RestHandler.onAnyOtherException() logs the exception
-				 * and then announces onException on the next line. Both reach
-				 * the module, so the logged copy is dropped. RestHandler.onError()
-				 * logs the same shape but announces nothing, so its copy must be
-				 * kept or that alert disappears completely. */
+				/* RestHandler reports some errors twice, but onError() only logs once.
+				 * Drop duplicates without losing the single onError report. */
 
 				it( "skips the log that RestHandler.onAnyOtherException also announces", function(){
 					capture.capture(
@@ -132,7 +134,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				it( "handles a message shorter than the matched prefix", function(){
 					expect( function(){
 						capture.capture( newLogEvent( message = "Boom", extraInfo = newRestHandlerExtraInfo() ) );
-					} ).notToThrow( message = "left() would throw on Adobe ColdFusion; findNoCase() does not" );
+					} ).notToThrow( message = "a message shorter than the prefix must not break the check" );
 					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
 				} );
 

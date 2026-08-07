@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines FrameClassifier unit tests.
+	 */
 	function run(){
 		describe( "FrameClassifier", function(){
 			beforeEach( function(){

@@ -1,22 +1,16 @@
 /**
  * ApiFault
  *
- * A REST handler that fails before its action runs, so the kept alert path can
- * be checked.
+ * Fails before its REST action to test the alert that must be kept.
  *
- * RestHandler.aroundHandler() catches everything the action throws and sends it
- * to onAnyOtherException(), which logs the exception and then announces
- * onException. The module drops that logged copy, because the announcement
- * produces a better alert. See Api.cfc for that case.
+ * RestHandler logs errors from an action and then announces onException. The
+ * module keeps the announcement because it contains better exception data.
  *
- * An exception thrown in preHandler escapes aroundHandler instead. ColdBox
- * catches it and calls RestHandler.onError(), which logs the same
- * { _stacktrace, httpData } shape but announces nothing. That log is the only
- * report of the failure, so the module must still alert on it. /apiFault/boom
- * exists to prove it does.
+ * An error from preHandler reaches RestHandler.onError() instead. onError() logs
+ * _stacktrace and httpData but does not announce onException. That log is the
+ * only report, so the module must keep it.
  *
- * onError() rethrows instead of logging when ColdBox debugMode is on. The
- * harness leaves debugMode off, so this scenario logs as intended.
+ * The harness keeps debugMode off because onError() rethrows in debug mode.
  */
 component extends="coldbox.system.RestHandler" {
 

@@ -81,6 +81,7 @@
 			description : "These exist to be read, not just counted. Open each email and check the section named in the note.",
 			scenarios   : [
 				{ route : "/trigger/maskedRc?password=hunter2&api_key=sk-live-abc&token=xyz&orderId=88213", note : "Secrets in rc should read *** masked ***. orderId should stay readable." },
+				{ route : "/trigger/nestedSecrets", note : "Nested secrets and a ~400KB base64 blob in extraInfo. Nested keys masked; the blob clipped with a size label; the alert builds without a pause." },
 				{ route : "/trigger/messyRc", note : "Binary, a nested struct, a component and long text in rc." },
 				{ route : "/trigger/htmlInjection", note : "Markup in the message. It should show as literal text." },
 				{ route : "/trigger/unicode", note : "Accented Latin, CJK and emoji." },

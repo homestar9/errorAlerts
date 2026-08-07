@@ -2,9 +2,9 @@
 
 ![errorAlerts Logo](https://github.com/homestar9/errorAlerts/blob/main/errorAlerts-logo.avif?raw=true)
 
-`errorAlerts` emails you when a ColdBox application has an unhandled exception or logs an `ERROR` or `FATAL` message.
+`errorAlerts` emails developers when a ColdBox application has an unhandled exception or logs an `ERROR` or `FATAL` message.
 
-It is designed to be safe during an error storm. By default, the first three occurrences of the same error are emailed immediately. Additional occurrences are counted and sent later in one digest instead of flooding your inbox.
+By default, the first three occurrences of one error send emails immediately. Later occurrences are counted and sent in one digest. This limit prevents a large error burst from flooding your inbox.
 
 The module registers itself with ColdBox, so you do not need to edit your LogBox configuration.
 
@@ -45,7 +45,7 @@ component {
 }
 ```
 
-Replace the example addresses with real addresses that your mail server is allowed to use.
+Replace both example addresses with addresses that your mail server accepts.
 
 Important defaults:
 
@@ -69,9 +69,9 @@ function testError( event, rc, prc ){
 }
 ```
 
-Visit the action in your browser. You should receive an email containing the error message, exception details, the source lines around the failing line, the route, a copyable request URL, stack frames, engine and framework versions, and a sanitized copy of the request collection.
+Visit the action in your browser. You should receive an email with the error details, request details, source code, stack frames, and runtime versions.
 
-When an error is thrown deep inside framework or ORM code, the email also pins the first stack frame that belongs to your own application - your handler, model, or view - and shows a second source snippet at that line, labeled "Application caller". Rows such as "... 5 frames omitted" mark where the stack list is shortened.
+If an error starts deep inside framework or ORM code, the email also finds the first frame from your application. The email labels this frame and its source as "Application caller." A row such as "... 5 frames omitted" marks a shortened stack.
 
 Remove the test action after confirming delivery.
 
@@ -116,9 +116,9 @@ Passing the caught exception as `extraInfo` lets the alert include its type, det
 
 ## How throttling works
 
-Errors are grouped using four things: their LogBox category, the first 200 characters of the message, the top stack frame, and the first stack frame that belongs to your own application. Numbers and UUIDs in messages are normalized by default, so messages such as `Order 123 failed` and `Order 456 failed` are treated as the same error.
+The module groups errors by LogBox category, the first 200 message characters, the top stack frame, and the first application stack frame. It replaces numbers and UUIDs in messages by default. For example, `Order 123 failed` and `Order 456 failed` belong to the same group.
 
-The application frame matters most for database errors. Their top frame is always the same framework file, so without the application frame two unrelated failing queries would differ only by message text and would share one throttle window. Which folders count as application code is controlled by `applicationFramePrefixes`.
+Database errors often have the same framework frame at the top of the stack. The application frame keeps failures from different call sites in separate groups. `applicationFramePrefixes` defines which paths belong to the application.
 
 With the defaults, if the same error occurs five times within ten minutes:
 
@@ -128,15 +128,15 @@ With the defaults, if the same error occurs five times within ten minutes:
 
 Throttle counters are stored in memory and are separate for each application server.
 
-Throttling cannot merge two reports of the same exception when they arrive with different categories and messages. That is why ColdBox's `RestHandler` needs its own handling rather than a throttle rule: it logs an exception under the calling handler's category and then announces `onException` on the next line, and the two copies hash to different signatures. The module drops the logged copy and keeps the announced one, because only the announced copy carries a real `tagContext` and is therefore the only one that can show a stack trace and a code snippet. See `suppressDuplicateFrameworkLogs` in the advanced settings.
+ColdBox's `RestHandler` can report one exception twice with different categories and messages. Throttling cannot group those two reports. The module drops the logged copy and keeps the `onException` announcement. Only the announcement has the `tagContext` needed for stack frames and source code. See `suppressDuplicateFrameworkLogs` in the advanced settings.
 
 ## Common configuration recipes
 
-Most examples in this section go inside the struct returned by `config/modules/errorAlerts.cfc`. A few show that whole file instead, because they add a function next to `configure()`.
+Most examples belong in the struct returned by `config/modules/errorAlerts.cfc`. Examples that add another function show the complete file.
 
 ### Disable alerts in development
 
-Alerts are active in every environment. To turn them off in one environment, add a function named after that environment to `config/modules/errorAlerts.cfc`. ColdBox calls it with the merged settings struct after `configure()` returns, so your changes apply only in that environment:
+Alerts are active in every environment. To disable one environment, add a function with that environment's name to `config/modules/errorAlerts.cfc`. ColdBox passes the merged settings to this function after `configure()` runs.
 
 ```cfc
 component {
@@ -156,9 +156,9 @@ component {
 }
 ```
 
-The function name must match the environment name that ColdBox detects. Add a `staging( settings )` function the same way to change settings there.
+The function name must match the detected environment name. For example, use `staging( settings )` for the staging environment.
 
-Change `settings` in place. The function's return value is ignored, so `return { enabled : false }` has no effect.
+Change `settings` directly. ColdBox ignores the function's return value.
 
 If you prefer to keep all environment overrides in one file, a `development()` function in `config/Coldbox.cfc` that sets `moduleSettings.errorAlerts.enabled = false` works too.
 
@@ -183,7 +183,7 @@ throttle : {
 }
 ```
 
-When overriding a nested setting such as `throttle`, include every key in that struct.
+You may override only the nested keys you need. Module startup restores any missing `throttle` defaults.
 
 ### Ignore expected errors or noisy categories
 
@@ -200,14 +200,14 @@ ignoreCategories : [
 ]
 ```
 
-Category matching is case-insensitive and checks the beginning of the category. Keep the two default categories shown above:
+Category matching ignores case and checks the start of the category. Keep the two default categories:
 
 - `cbmailservices` prevents a failed alert email from generating another alert.
 - `coldbox.system.Bootstrap` prevents duplicate emails for unhandled exceptions.
 
 ### Identify the logged-in user
 
-Set `userProvider` to a closure that receives WireBox and returns a display string. The alert's Request section then shows who was signed in when the error happened. This example uses [cbauth](https://forgebox.io/view/cbauth):
+Set `userProvider` to a closure that receives WireBox and returns text for the signed-in user. This example uses [cbauth](https://forgebox.io/view/cbauth):
 
 ```cfc
 userProvider : function( wirebox ){
@@ -220,17 +220,17 @@ userProvider : function( wirebox ){
 }
 ```
 
-Return `""` when nobody is signed in. Errors thrown by the closure are swallowed so a broken provider can never stop an alert; the row simply shows the `emptyValueText` placeholder.
+Return `""` when nobody is signed in. A provider error is ignored so it cannot stop the alert. The row then uses `emptyValueText`.
 
 ### Include the request body for API endpoints
 
-A failing JSON API call shows no input by default, because the posted body never reaches `rc`. Turn the body on for API-heavy applications:
+A JSON request body does not appear in `rc`. Enable request bodies when that input is needed for API errors:
 
 ```cfc
 includeRequestBody : true
 ```
 
-JSON bodies get their top-level fields masked with `maskKeys` and are capped at `requestBodyMaxLength` characters. Form posts stay excluded because the `rc` table already shows those fields, masked.
+JSON objects and arrays use the masking settings at every visited level. Output stops at `requestBodyMaxLength`. Form posts stay excluded because `rc` already shows their masked fields.
 
 ### Write test emails to files
 
@@ -274,6 +274,90 @@ component {
 
 Trigger a test error, then open the generated HTML file in the application's `mail-spool` folder. Do not use the File protocol as your production mailer.
 
+## Masking and sanitization
+
+Alert emails can include request data and secrets. Masking is **off by default** because each application uses different field names. Add your sensitive field names to `maskKeys` before production use.
+
+### Exact key names: `maskKeys`
+
+```cfc
+maskKeys : [
+    // A starter list to copy. Keep what applies and add your own field names.
+    "password", "passwd", "token", "secret", "apikey", "api_key",
+    "authorization", "creditcard", "cvv",
+    "ssn", "cardNumber", "client_secret", "access_token", "refresh_token"
+]
+```
+
+A matching field value becomes `*** masked ***` in `rc`, JSON bodies, `extraInfo`, and query strings. Matching ignores case but requires the complete field name. For example, `password` does **not** match `newPassword` or `passwordConfirm`. List every sensitive name used by your forms and APIs. The module uses one hash lookup per field, so a long list does not make each lookup slower.
+
+Masking a container key, such as `auth` or `profile`, hides the entire structure under it with one entry.
+
+### Wildcard patterns: `maskKeyPatterns`
+
+Use a wildcard pattern when outside systems provide many versions of one field name. For example, `ssn` does not match `indemnitor1SocialSecurityNumber`. This pattern does:
+
+```cfc
+maskKeyPatterns : [ "*socialsecurity*" ]
+```
+
+`*` matches any number of characters. It is the only special character. Matching ignores case and covers the complete key. The module checks patterns only when `maskKeys` has no exact match. Pattern results are cached for repeated field names.
+
+Keep patterns narrow. For example, `*token*` also hides useful fields such as `tokenCount` and `nextPageToken`. Version 2.1.0 removed automatic substring matching for this reason.
+
+### Long values: `longValueMaxLength` and `longValueExemptKeys`
+
+Payloads can contain large strings such as files or API responses. A value longer than `longValueMaxLength` keeps its beginning and adds its original size:
+
+```text
+JVBERi0xLjcKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2… [truncated, 245120 chars total]
+```
+
+Set `longValueMaxLength : 0` to disable the per-value limit. Keys in `longValueExemptKeys` skip this limit. The default exemptions keep stack traces readable. Complete section limits still apply.
+
+The sanitizer stops after it collects enough content for the section limit. `extraInfo` uses `extraInfoMaxLength`, and JSON bodies use `requestBodyMaxLength`. Large structures stop early and show `[N more keys]`. Every displayed value passes the mask check before a limit can stop the walk.
+
+### Which do I need?
+
+| Situation | Reach for |
+|---|---|
+| You know the field name | `maskKeys` |
+| Many vendor spellings of one field | `maskKeyPatterns` |
+| A whole container with no diagnostic value | the container's key in `maskKeys` |
+| Huge values bloating or slowing alerts | Nothing. `longValueMaxLength` is on by default. |
+
+### What key masking can never reach
+
+Key masking needs a field name. It cannot mask bound SQL values, exception `detail`, exception `extendedInfo`, non-JSON bodies, or secrets inside plain strings. Change a logging call if it passes a secret in one of these places. Length limits reduce the amount shown but do not make this content safe.
+
+An XML or plain-text body is printed as sent, up to `requestBodyMaxLength`. A body recognized as JSON is either walked and masked or reported by size. JSON is not printed raw when parsing or masking cannot finish.
+
+Engines do not always agree about valid JSON. Adobe ColdFusion 2023 rejects a trailing comma that Lucee 5 and BoxLang accept. An engine may treat malformed JSON as plain text and print it as sent. Keep `includeRequestBody` off when request bodies may contain secrets.
+
+### Objects passed as `extraInfo`
+
+The sanitizer walks plain structs and arrays. It sends a component instance directly to the JSON serializer. **Keys inside the component are not checked against `maskKeys`.** A component with a cached token may print that token.
+
+Queries also go directly to the serializer. Their rows often provide useful details. Objects often contain framework state and can have large data graphs, so logging them is less useful and more expensive.
+
+The fix belongs at the logging call site. Log the values you need, not the whole object:
+
+```cfc
+// This can print unmasked component data.
+logger.error( "Charge failed", { gateway : paymentGateway } );
+
+// Log plain fields so maskKeys can check them.
+logger.error( "Charge failed", {
+    gateway    : "AcmePay",
+    statusCode : response.statusCode,
+    orderId    : order.getId()
+} );
+```
+
+The module does not call `getMemento()` on an object. On a Quick or cborm entity, that call can query relationships, walk an unlimited object graph, or throw another error.
+
+The `rc` table shows an object as `[object com.foo.Bar]`. The table only supports short strings limited by `rcValueMaxLength`. This output does not mean the object's keys were masked.
+
 ## Configuration reference
 
 ### Common settings
@@ -294,41 +378,59 @@ Trigger a test error, then open the generated HTML file in the application's `ma
 
 The default ignored categories are `[ "cbmailservices", "coldbox.system.Bootstrap" ]`.
 
+`throttle` and `includeScopes` are structs. ColdBox replaces a complete nested struct when an application overrides one key. The module restores missing defaults during startup, so partial overrides are safe:
+
+```cfc
+moduleSettings = {
+    errorAlerts : {
+        to            : "dev@example.com",
+        includeScopes : { session : true },   // rc, cgi and extraInfo keep their defaults
+        throttle      : { windowSeconds : 60 } // maxPerWindow and maxTrackedSignatures keep theirs
+    }
+};
+```
+
 ### Advanced settings
 
 | Setting | Default | Description |
 |---|---|---|
 | `notifier` | `"EmailNotifier@errorAlerts"` | WireBox ID of the notification provider. |
-| `suppressDuplicateFrameworkLogs` | `true` | Drops the LogBox copy of an exception that ColdBox's `RestHandler` both logs and announces, so a REST application receives one alert instead of two. `ignoreCategories` cannot do this, because `RestHandler` logs under the calling handler's own category, which differs for every handler. Set `false` only if you have unregistered the module's `UnhandledExceptionCapture` interceptor, since that interceptor is what reports the kept copy. |
+| `suppressDuplicateFrameworkLogs` | `true` | Drops the LogBox copy of an exception that `RestHandler` also announces. Category rules cannot find every copy because each handler has a different category. Set this to `false` only after unregistering `UnhandledExceptionCapture`. |
 | `throttle.maxTrackedSignatures` | `500` | Maximum error signatures kept in memory. New signatures send unthrottled when the limit is reached. |
 | `digestFlushSeconds` | `60` | How often expired throttle windows are checked for pending digests. |
 | `normalizeSignatures` | `true` | Replaces digit runs and UUIDs before errors are grouped. |
 | `maxBodyBytes` | `102400` | Maximum rendered email size. Lower-priority sections are removed first. |
 | `rcValueMaxLength` | `200` | Maximum rendered length of each request-collection value. |
-| `stackFrames` | `10` | Maximum stack frames shown in an alert. Frames whose template is not a file path, such as JDBC driver internals, are skipped after the first frame. When the first application-owned frame falls past this cap, it is appended as one extra pinned frame. |
-| `applicationFramePrefixes` | Conventional ColdBox folders | Path prefixes, relative to the application root, that mark a stack frame as application code. Defaults to `/handlers/`, `/models/`, `/views/`, `/layouts/`, `/config/`, `/interceptors/`, and `/modules_app/`. `/modules/` is deliberately excluded because installed dependencies live there. Override for a non-conventional source layout. |
-| `digestSampleSize` | `5` | Distinct routes and client IPs a digest email lists from the occurrences in one throttle window. Values past the cap are reported as "at least N distinct". `0` turns sampling off. The client IP row puts visitor IP addresses in the email, and its value is read from the `X-Forwarded-For` request header when present, which the caller controls. Treat it as a diagnostic hint, not as proof of who sent the request. |
+| `stackFrames` | `10` | Maximum stack frames shown. Driver frames that are not file paths are skipped after the first frame. The first application frame is added when it falls past this limit. |
+| `applicationFramePrefixes` | Conventional ColdBox folders | Paths that mark application stack frames. Defaults cover handlers, models, views, layouts, config, interceptors, and `modules_app`. Installed dependencies under `/modules/` are excluded. |
+| `digestSampleSize` | `5` | Maximum distinct routes and client IP addresses listed in a digest. `0` disables both lists. A client controls `X-Forwarded-For`, so treat the IP address as a hint rather than proof. |
 | `includeScopes` | `{ rc: true, cgi: true, extraInfo: true, session: false }` | Controls which diagnostic sections are included. `session` adds a `sessionId` row so alerts from one visitor can be tied together. |
 | `codeSnippetLines` | `5` | Source lines shown either side of the failing line, with the failing line highlighted. `0` turns the snippet off. Costs one file read per alert and puts application source in the email. |
-| `userProvider` | `""` | A closure that receives WireBox and returns a display string for the signed-in user. See the recipe below. The `user` row only appears when this is set. |
+| `userProvider` | `""` | Closure that receives WireBox and returns text for the signed-in user. See the recipe above. The `user` row only appears when this is set. |
 | `relativePaths` | `true` | Trims the application root from file paths so a path reads `/handlers/Main.cfc`. Paths outside the application root are always shown in full. Set `false` to keep every path absolute. |
-| `includeQueryParams` | `true` | Include the bound parameter values from a failed query. The best data for reproducing a database error, but the values can contain whatever a visitor typed, and `maskKeys` cannot filter them because they carry no field names. |
-| `maskQueryString` | `true` | Apply `maskKeys` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
+| `includeQueryParams` | `true` | Include bound values from a failed query. These values can help reproduce the error, but they may contain user input that `maskKeys` cannot hide. |
+| `maskQueryString` | `true` | Apply `maskKeys` and `maskKeyPatterns` to the query string shown in the Request section. Turning this off can put a secret from a GET request in email. |
 | `emptyValueText` | `"N/A"` | Placeholder shown for a request value the request did not provide. |
-| `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section, matched ignoring case. `Cookie` and `Authorization` are never included, even when listed. |
-| `includeRequestBody` | `false` | Include the raw request body. Useful for JSON and API endpoints, whose payload never reaches `rc`. JSON bodies get their top-level fields masked with `maskKeys`; form posts are skipped because `rc` already shows them masked. |
+| `includeHeaders` | `[ "Content-Type" ]` | Request headers shown in the Request section. `Cookie`, `Authorization`, and `Proxy-Authorization` are always blocked. |
+| `includeRequestBody` | `false` | Include bodies that are not form posts. JSON objects and arrays are masked. JSON that cannot be walked is reported by size. Non-JSON text is shown as sent because it has no field names to mask. |
 | `requestBodyMaxLength` | `4000` | Maximum characters of request body shown. |
-| `maskKeys` | Password/token-related names | Request keys, query-string fields, JSON body fields, and `extraInfo` keys whose values are replaced with `*** masked ***`. Matching is exact, ignoring case. `extraInfo` is masked at any nesting depth, stopping at five levels. |
+| `maskKeys` | `[]` | Exact field names to mask in `rc`, JSON bodies, `extraInfo`, and query strings. Nested walking stops after five levels. Matching ignores case. Masking is off by default. |
+| `maskKeyPatterns` | `[]` | Wildcard field-name patterns, checked only when the exact `maskKeys` lookup misses. `*` matches any run of characters; matching ignores case and covers the whole name. |
+| `longValueMaxLength` | `500` | Per-value cap for string values found while walking `extraInfo` or a JSON body. Longer values keep this many characters plus a label stating the real size. `0` disables the per-value cap. |
+| `longValueExemptKeys` | `[ "_stacktrace", "stacktrace" ]` | Keys whose values skip the per-value cap, matched exactly ignoring case, so stack traces keep their frames. The whole-output caps still apply. |
+| `extraInfoMaxLength` | `2000` | Maximum characters of sanitized `extraInfo` shown, and the collection budget for its walk. |
 
-The default `maskKeys` list covers `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`, `authorization`, `creditcard`, and `cvv`. Matching is an exact, case-insensitive comparison: `password` does **not** cover `newPassword` or `passwordConfirm`. Check the real field names your forms post and list every variant before using alerts in production.
+Masking is opt-in and has its own section above: see [Masking and sanitization](#masking-and-sanitization) for the starter list, wildcard patterns, and long-value truncation.
 
-Three things are still **not** masked, because they carry no field names to match against: the query parameter values shown by `includeQueryParams`, and an exception's `detail` and `extendedInfo`. Do not put secrets in those.
+### Upgrading past 2.4
+
+Masking is now opt-in. Applications that relied on the old default list must set `maskKeys`. Copy the starter list from [Masking and sanitization](#masking-and-sanitization) and keep the names your application uses. This release also masks nested `rc` and JSON fields. Strings longer than `longValueMaxLength` now show a shortened value and size label. Set the limit to `0` to keep complete values.
 
 ### Upgrading to 2.3
 
 Two behavior changes to know about:
 
-- Error signatures now include the first application-owned stack frame, so two different call sites that fail with the same message are throttled separately. Every signature changes once on upgrade, which restarts any open throttle window. No action is needed; a burst in progress during the deploy may send up to `maxPerWindow` extra emails.
+- Error signatures now include the first application stack frame. Different call sites with the same message now use separate throttle windows. Existing windows restart during the upgrade and may allow up to `maxPerWindow` extra emails.
 - `relativePaths` now defaults to `true`, so file paths inside the application root render as `/handlers/Main.cfc` instead of the full absolute path. Set it back to `false` to keep absolute paths.
 
 ### Upgrading from 2.0
@@ -366,7 +468,7 @@ Pending throttle data lives only in memory. Restarting or reinitializing the app
 
 ## How it works
 
-The module attaches an appender to ColdBox's root LogBox logger and registers an `onException` interceptor. Both feed the same capture pipeline, which applies ignore rules, groups matching errors, throttles repeats, builds a sanitized payload, and passes it to the configured notifier. Internal failures are contained so the alerting system does not make an already-failing request worse.
+The module adds an appender to ColdBox's root LogBox logger and registers an `onException` interceptor. Both use the same capture process. The process applies ignore rules, groups matching errors, throttles repeats, sanitizes the payload, and calls the notifier. Internal failures do not escape into the original request.
 
 ## Custom notifiers
 
@@ -393,14 +495,14 @@ Map the component in WireBox, then set its mapping ID:
 notifier : "MyNotifier@myapp"
 ```
 
-A custom notifier does not require `to`. It must contain its own failures and must not log them at `ERROR`, which could create an alert loop.
+A custom notifier does not require `to`. It must handle its own failures. Do not log those failures at `ERROR` because that can create an alert loop.
 
 ## Operational notes
 
 - Throttle counters and pending digests are lost on application restart or `fwreinit`.
 - Throttling is per JVM, so web-farm nodes do not share counters.
-- The default queued delivery avoids blocking the failing request, but delivery timing depends on the cbmailservices scheduler.
-- Request values are truncated and keys named in `maskKeys` are masked, but the match is exact: review `maskKeys` and list every sensitive field name your application actually uses.
+- Queued delivery does not wait during the failing request. Delivery time depends on the cbmailservices scheduler.
+- Masking is opt-in: `maskKeys` ships empty, and the exact match means every sensitive field name your application actually uses has to be listed. Review [Masking and sanitization](#masking-and-sanitization) before production use.
 
 ## Contributing
 
@@ -410,9 +512,9 @@ box run-script start:2023
 box testbox run
 ```
 
-To run the harness on another engine, swap the start script: `box run-script start:boxlang` (BoxLang), `box run-script start:lucee5` (Lucee 5), `box run-script start:lucee6` (Lucee 6), or `box run-script start:2025` (Adobe 2025). All engines use the same port, so stop one before starting another.
+To use another engine, run its start script: `start:boxlang`, `start:lucee5`, `start:lucee6`, or `start:2025`. Prefix the script with `box run-script`. All engines use the same port, so stop the active engine first.
 
-The harness home page at <http://127.0.0.1:60310/> lists every failure scenario the module can be tested against, and can send the resulting alerts to a local SMTP server so you can read them as real email. See [docs/test-harness.md](docs/test-harness.md).
+The harness home page at <http://127.0.0.1:60310/> lists every failure scenario. It can send alerts to a local SMTP server for inspection. See [docs/test-harness.md](docs/test-harness.md).
 
 Releases must use `box run-script release`; do not run `box publish` directly from the repository root. See [RELEASE.md](RELEASE.md) for the routine and [docs/release-process.md](docs/release-process.md) for why.
 

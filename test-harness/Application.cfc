@@ -3,16 +3,16 @@
  */
 component {
 
-	// Name the module under test.
+	// Store the module name for mappings and ColdBox configuration.
 	request.MODULE_NAME = "errorAlerts";
 
-	// Configure the test application.
+	// Keep sessions available for request and security scenarios.
 	this.name              = hash( getCurrentTemplatePath() );
 	this.sessionManagement = true;
 	this.sessionTimeout    = createTimespan( 0, 0, 15, 0 );
 	this.setClientCookies  = true;
 
-	// ColdBox uses this directory as the application root.
+	// Point ColdBox at the test harness.
 	COLDBOX_APP_ROOT_PATH = getDirectoryFromPath( getCurrentTemplatePath() );
 	// Use the web root as the application mapping.
 	COLDBOX_APP_MAPPING   = "";
@@ -24,16 +24,12 @@ component {
 	// Map the test harness as /root.
 	this.mappings[ "/root" ] = COLDBOX_APP_ROOT_PATH;
 
-	/* Declare an in-memory database for the query-failure scenarios. No engine
-	 * here ships both drivers: Adobe gets Derby from `cfpm install derby` and
-	 * Lucee 6 bundles HSQLDB. Declaring a datasource whose driver is missing
-	 * costs nothing until something queries it, so DbService probes both and
-	 * uses whichever connects.
+	/* Declare in-memory databases for query failure scenarios. Adobe can use
+	 * Derby, while Lucee 6 includes HSQLDB. DbService tries both and keeps the
+	 * datasource that connects.
 	 *
-	 * The two engines spell the JDBC url differently. Adobe wants `url` plus
-	 * `driver : "other"`, and Lucee wants `connectionString`. Sending Adobe an
-	 * unknown key logs "Unsupported attributes found in URL for datasource", so
-	 * the struct is built per engine. */
+	 * Adobe uses `url` with `driver : "other"`. Lucee uses `connectionString`.
+	 * Build a different struct for each engine to avoid unsupported keys. */
 	if ( server.keyExists( "lucee" ) ) {
 		this.datasources[ "harnessDerby" ] = {
 			class            : "org.apache.derby.jdbc.EmbeddedDriver",
@@ -55,17 +51,11 @@ component {
 			password         : ""
 		};
 	} else {
-		/* Adobe reaches its Derby driver through the named "Apache Derby Embedded"
-		 * type. Going through driver "other" with the same class times out,
-		 * because cfpm installs Derby as an OSGi bundle that the generic JDBC
-		 * path cannot see.
+		/* Adobe must use the named Apache Derby Embedded driver. The generic JDBC
+		 * path cannot see the OSGi bundle installed by cfpm.
 		 *
-		 * Adobe builds the url from the template `jdbc:derby:[database];
-		 * create=[isnewdb];[args]` in WEB-INF/cfusion/lib/neo-drivers.xml. So
-		 * `isnewdb` is what creates the database, and putting "memory:" in front
-		 * of the name keeps the whole thing in RAM with nothing written to disk.
-		 * Leaving isnewdb out produces `create=;`, which Derby rejects and which
-		 * shows up as a connection timeout. */
+		 * The `memory:` database name keeps all data in RAM. args adds create=true
+		 * so Derby creates the database before the datasource connects. */
 		this.datasources[ "harnessDerby" ] = {
 			driver   : "Apache Derby Embedded",
 			database : "memory:harness",
@@ -102,7 +92,11 @@ component {
 	this.mappings[ "/moduleroot" ]            = moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] = modulePath;
 
-	// Start ColdBox with the application.
+	/**
+	 * onApplicationStart
+	 *
+	 * Starts ColdBox with the test harness configuration.
+	 */
 	public boolean function onApplicationStart(){
 		application.cbBootstrap = new coldbox.system.Bootstrap(
 			COLDBOX_CONFIG_FILE,
@@ -114,26 +108,51 @@ component {
 		return true;
 	}
 
-	// Pass each request to ColdBox.
+	/**
+	 * onRequestStart
+	 *
+	 * Passes each request to ColdBox.
+	 *
+	 * @targetPage The requested CFML template.
+	 */
 	public boolean function onRequestStart( string targetPage ){
 		if ( url.keyExists( "fwreinit" ) && server.keyExists( "lucee" ) ) {
 			pagePoolClear();
 		}
 
-		// Process the current request.
 		application.cbBootstrap.onRequestStart( arguments.targetPage );
 
 		return true;
 	}
 
+	/**
+	 * onSessionStart
+	 *
+	 * Passes new sessions to ColdBox.
+	 */
 	public void function onSessionStart(){
 		application.cbBootStrap.onSessionStart();
 	}
 
+	/**
+	 * onSessionEnd
+	 *
+	 * Passes completed sessions to ColdBox.
+	 *
+	 * @sessionScope The session that ended.
+	 * @appScope     The current application scope.
+	 */
 	public void function onSessionEnd( struct sessionScope, struct appScope ){
 		arguments.appScope.cbBootStrap.onSessionEnd( argumentCollection = arguments );
 	}
 
+	/**
+	 * onMissingTemplate
+	 *
+	 * Lets ColdBox handle a missing template.
+	 *
+	 * @template The requested template path.
+	 */
 	public boolean function onMissingTemplate( template ){
 		return application.cbBootstrap.onMissingTemplate( argumentCollection = arguments );
 	}

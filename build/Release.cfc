@@ -3,10 +3,9 @@
  *
  * Run it with: box run-script release
  *
- * The order matters. Everything that could stop a release happens before anything permanent:
- * the checks run before the remote sync and before ForgeBox receives anything. Once a version
- * is published it cannot be taken back, so every failure after that point prints the exact
- * commands to finish by hand.
+ * Checks run before any permanent release step. Once ForgeBox has a version,
+ * the version cannot be removed. A later failure prints the commands needed to
+ * finish the release by hand.
  *
  * Targets you can run on their own:
  *   run       Everything, in order. This is what box run-script release calls.
@@ -31,7 +30,7 @@ component {
 	/**
 	 * run
 	 *
-	 * The whole release, in order.
+	 * Runs the complete release in the required order.
 	 *
 	 * @version     The version to release. Defaults to the box.json version.
 	 * @dryRun      Do everything except publish, tag, and push. Prints what it would have run.
@@ -58,15 +57,14 @@ component {
 				.toConsole();
 		}
 
-		// 1. Checks. These run first so nothing permanent has happened if one fails.
+		// 1. Check everything before making permanent changes.
 		preflight(
 			version     = releaseVersion,
 			dryRun     = arguments.dryRun,
 			existingTag = arguments.existingTag
 		);
 
-		// 2. Line up a branch-based release with the remote. A dry run changes nothing, and a
-		//    tag-triggered release must build the immutable commit that is already checked out.
+		// 2. Fast-forward a branch release. Dry runs and tag builds stay unchanged.
 		if ( variables.s.gitSync && !arguments.dryRun && !arguments.existingTag ) {
 			syncWithRemote();
 		} else if ( arguments.existingTag ) {
@@ -110,8 +108,8 @@ component {
 	/**
 	 * preflight
 	 *
-	 * Everything that must be true before a release starts. Each check stops the run with a
-	 * plain explanation of how to fix it.
+	 * Checks every requirement before a release starts.
+	 * A failed check stops with instructions for fixing the problem.
 	 *
 	 * @version     The version being released.
 	 * @dryRun      Soften the checks that only matter for a real release.
@@ -131,9 +129,8 @@ component {
 			return error( "git could not read this folder (#status.output#). Is it a git repository?" );
 		}
 
-		// 2. Nothing uncommitted. This has to pass before the forced checkout later on, which
-		//    would throw those changes away. A dry run never checks out anything, so there it
-		//    is only worth a mention: rehearsing a release while still working is the point.
+		// 2. Protect uncommitted work before a later checkout can replace it.
+		//    A dry run does not check out files, so it only prints a warning.
 		if ( variables.s.requireCleanTree && len( trim( status.output ) ) ) {
 			if ( arguments.dryRun ) {
 				print
@@ -148,9 +145,8 @@ component {
 			}
 		}
 
-		// 3. A real branch-based release only runs from the production branch named in build.json.
-		//    A dry run may rehearse the release branch. Existing-tag mode accepts production or a
-		//    detached checkout (as used by tag-triggered CI), but not a tagged release branch.
+		// 3. Require the configured production branch for a branch release.
+		//    Existing-tag CI may use production or a detached checkout.
 		var branch = variables.config.execNative( "git", [ "rev-parse", "--abbrev-ref", "HEAD" ] );
 		if ( branch.exitCode != 0 ) {
 			return error( "git could not identify the checked-out branch (#branch.output#)." );
@@ -173,9 +169,7 @@ component {
 			);
 		}
 
-		// 4. A branch-based release owns the tag, so it must be absent locally and remotely. A
-		//    tag-triggered release instead requires that exact tag to point at the checked-out
-		//    commit. rev-list resolves both lightweight and annotated tags to their commit.
+		// 4. A branch release needs a new tag. Existing-tag mode needs that tag at HEAD.
 		var tagName = variables.s.tagPrefix & releaseVersion;
 		if ( arguments.existingTag ) {
 			requireExistingTagAtHead( tagName );
@@ -215,14 +209,12 @@ component {
 			}
 		}
 
-		// 5. The changelog must have a section for this version. This is what makes sure notes
-		//    are written before a release, and those notes become the GitHub Release body.
+		// 5. Require release notes because they become the GitHub Release body.
 		if ( variables.s.publish.github ) {
 			extractChangelogSection( releaseVersion );
 		}
 
-		// 6. The GitHub tool must be installed and signed in. Checking now, rather than after
-		//    publishing, keeps ForgeBox and GitHub from drifting apart.
+		// 6. Check GitHub access before ForgeBox receives the release.
 		if ( variables.s.publish.github && !arguments.dryRun ) {
 			var ghCheck = variables.config.execNative( "gh", [ "auth", "status" ] );
 			if ( ghCheck.exitCode == 127 ) {
@@ -259,8 +251,8 @@ component {
 	/**
 	 * github
 	 *
-	 * Tags the release, pushes it, and creates the GitHub Release with the changelog notes and
-	 * the built zip attached.
+	 * Tags and pushes the release, then creates a GitHub Release.
+	 * The GitHub Release includes the changelog notes and built zip.
 	 *
 	 * Run on its own to finish a release that stopped after publishing.
 	 *
@@ -288,8 +280,7 @@ component {
 			return;
 		}
 
-		// The zip the build produced. It goes on the GitHub Release with its checksum, so every
-		// release keeps a copy of exactly what was published.
+		// Attach the exact zip and checksum that were published.
 		var zipPath = variables.config.repoPath( "#variables.s.artifactsDir#/#slug#/#releaseVersion#/#slug#-#releaseVersion#.zip" );
 		var shaPath = zipPath & ".sha512";
 		if ( !fileExists( zipPath ) ) {
@@ -333,8 +324,7 @@ component {
 			return;
 		}
 
-		// From here on, ForgeBox may already hold this version, so every failure explains how
-		// to finish by hand rather than suggesting another full run.
+		// ForgeBox may now contain the version. Later failures provide recovery steps.
 		print.line().boldBlueLine( "=== Tagging and releasing on GitHub ===" ).toConsole();
 
 		var result = { exitCode : 0, output : "" };
@@ -373,14 +363,13 @@ component {
 			.toConsole();
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
+	/******************************** Private helpers ********************************/
 
 	/**
 	 * requireExistingTagAtHead
 	 *
-	 * Proves an existing lightweight or annotated tag resolves to the checked-out commit. This
-	 * is called by both the full release and the standalone github target, so recovery commands
-	 * cannot accidentally attach artifacts from a different commit.
+	 * Confirms that an existing tag points to the checked-out commit.
+	 * Both full and GitHub-only releases use this check to prevent mismatched files.
 	 *
 	 * @tagName The complete tag name, including its configured prefix.
 	 */
@@ -406,9 +395,8 @@ component {
 	 *
 	 * Runs Build.cfc and stops the release if the build fails.
 	 *
-	 * It starts Build.cfc as its own task rather than creating it directly. CommandBox hands a
-	 * task the helpers it needs, such as command() and print, and a component created the
-	 * ordinary way does not get them.
+	 * Build.cfc runs as a task because CommandBox must provide its command and
+	 * print helpers.
 	 *
 	 * @version   The version being built.
 	 * @skipTests Skip the test suite.
@@ -442,9 +430,8 @@ component {
 	/**
 	 * syncWithRemote
 	 *
-	 * Fast-forwards the checked-out production branch, so the release includes remote work but
-	 * never creates an accidental merge commit during publishing. Preflight has already proved
-	 * this is the configured branch and nothing is uncommitted.
+	 * Fast-forwards the production branch without creating a merge commit.
+	 * Preflight has already confirmed the branch and clean worktree.
 	 */
 	private function syncWithRemote(){
 		print.line().boldBlueLine( "=== Lining up with the remote ===" ).toConsole();
@@ -470,9 +457,8 @@ component {
 	 *
 	 * Publishes from the built folder rather than the project root.
 	 *
-	 * This matters. Publishing from the project root packages using .gitignore, and one broad
-	 * ignore rule can quietly drop source folders from what people install. Publishing the
-	 * folder the build produced sends exactly what the build checked.
+	 * Publishing from the project root would use .gitignore and could omit source.
+	 * The built folder contains the exact files that the build checked.
 	 *
 	 * @version The version being published.
 	 * @dryRun  Print what would run without doing it.
@@ -497,8 +483,7 @@ component {
 
 		print.line().boldBlueLine( "=== Publishing to ForgeBox ===" ).toConsole();
 
-		// Remember where we were, so a failed publish cannot leave the shell inside the
-		// staging folder.
+		// Restore the working folder even when publishing fails.
 		var originalDir = shell.pwd();
 		try {
 			command( "cd" ).params( publishDir ).run();
@@ -516,8 +501,8 @@ component {
 	/**
 	 * failWithManualSteps
 	 *
-	 * Stops the release after the package may already be published, printing the exact commands
-	 * that finish the job. Running the release again would refuse, because the version is out.
+	 * Stops after publishing and prints the commands needed to finish by hand.
+	 * The full release cannot be restarted after the version is published.
 	 *
 	 * @reason  What failed.
 	 * @tagName The tag for this release.
@@ -540,10 +525,8 @@ component {
 	 *
 	 * Stops the task, printing guidance that spans several lines.
 	 *
-	 * CommandBox's error() removes line breaks from its message, so anything longer than a
-	 * sentence arrives as one run-together block. The guidance is printed first, where it keeps
-	 * its shape, and error() is left with the single line that says what went wrong. That is
-	 * also why the guidance appears above the error rather than below it: error() ends the task.
+	 * CommandBox error() removes line breaks and ends the task. Print detailed
+	 * guidance first so its formatting stays readable.
 	 *
 	 * @summary One line saying what went wrong.
 	 * @detail  Lines of guidance to print first.
@@ -563,12 +546,12 @@ component {
 	/**
 	 * extractChangelogSection
 	 *
-	 * Pulls one version's notes out of the changelog: everything between its "## [version]"
-	 * heading and the next "##" heading. Stops the run when the section is missing, which is
-	 * what makes sure notes exist before a release.
+	 * Returns one version's notes from the changelog.
+	 * The section starts at its version heading and ends at the next level-two
+	 * heading. A missing section stops the release.
 	 *
-	 * A note on hashes: in CFML a doubled ## in a string means one literal #, so the patterns
-	 * below use #### to match a two-hash "## " markdown heading.
+	 * CFML uses ## for one literal # inside a string. The patterns use #### to
+	 * match the two hashes in a Markdown heading.
 	 *
 	 * @version The version whose notes to pull out.
 	 */
@@ -618,8 +601,7 @@ component {
 	/**
 	 * isPrerelease
 	 *
-	 * A version with a hyphen, such as 1.0.0-beta.4, is a pre-release, so the GitHub Release
-	 * is marked as one.
+	 * Returns true for a prerelease version such as 1.0.0-beta.4.
 	 *
 	 * @version The version being released.
 	 */

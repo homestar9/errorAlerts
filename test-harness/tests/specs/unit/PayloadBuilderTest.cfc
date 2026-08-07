@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines PayloadBuilder unit tests.
+	 */
 	function run(){
 		describe( "PayloadBuilder", function(){
 			beforeEach( function(){
@@ -66,9 +71,8 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "masks the Authorization header RestHandler puts in extraInfo", function(){
-				/* RestHandler passes getHTTPRequestData() as extraInfo, so every
-				 * request header lands in the email. That value never reaches
-				 * buildHeaders(), where Cookie and Authorization are blocked. */
+				/* RestHandler places request headers inside extraInfo. This path does
+				 * not pass through the header blocklist in buildHeaders(). */
 				var payload = builder.build(
 					newLogEvent( extraInfo = newRestHandlerExtraInfo( "Bearer leak-me-please" ) ),
 					"sig-1",
@@ -99,9 +103,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "does not truncate extraInfo values to rcValueMaxLength", function(){
-				/* sanitizeValue() clips to rcValueMaxLength, which would cut a
-				 * stack trace down to nothing. Only the caller's 2000-character
-				 * cap applies here. */
+				// extraInfo uses its section limit instead of the shorter rc value limit.
 				var info = { "_stacktrace" : repeatString( "y", 900 ) };
 
 				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
@@ -138,9 +140,240 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( result[ "PASSWORD" ] ).toBe( "*** masked ***", "matching ignores case" );
 				expect( result.apiToken ).toBe( "abc", "exact matching must not hide a key that merely contains 'token'" );
 				expect( result.passwordHint ).toBe( "my hint", "a near-miss key must not be masked" );
-				expect( result.longText.len() ).toBeLTE( settings.rcValueMaxLength + 1, "truncated plus ellipsis" );
+				expect( result.longText ).toInclude( "[truncated, 500 chars total]", "a clipped value states its real size" );
+				expect( result.longText.len() ).toBeLTE(
+					settings.rcValueMaxLength + 40,
+					"the clipped prefix plus the size label"
+				);
 				expect( result.filters ).toInclude( "active" );
 				expect( result.payload ).toInclude( "binary" );
+			} );
+
+			it( "masks nothing when maskKeys and maskKeyPatterns are empty", function(){
+				// The module default: masking is opt-in.
+				settings.maskKeys        = [];
+				settings.maskKeyPatterns = [];
+				var payload = builder.build(
+					newLogEvent( extraInfo = { password : "visible-now", nested : { token : "also-visible" } } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo ).toInclude( "visible-now" );
+				expect( payload.extraInfo ).toInclude( "also-visible" );
+				expect( payload.extraInfo ).notToInclude( "masked" );
+			} );
+
+			it( "masks sensitive keys nested inside rc values", function(){
+				var rc = structNew( "ordered" );
+				rc[ "payment" ] = { cardholder : "Ada Lovelace", password : "nested-rc-secret" };
+				rc[ "calls" ]   = [ { url : "/v1/pay", apikey : "array-rc-secret" } ];
+				builder.$property( propertyName = "coldbox", mock = newControllerStub( rc ) );
+
+				var result = builder.build( newLogEvent(), "sig-1", 1 ).rc;
+
+				expect( result.payment ).toInclude( "*** masked ***" );
+				expect( result.payment ).notToInclude( "nested-rc-secret" );
+				expect( result.payment ).toInclude( "Ada Lovelace", "unmasked neighbors stay readable" );
+				expect( result.calls ).notToInclude( "array-rc-secret" );
+				expect( result.calls ).toInclude( "/v1/pay" );
+			} );
+
+			it( "masks nested keys inside a JSON request body", function(){
+				makePublic( builder, "buildBody" );
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { user : { password : "deep-body-secret" }, orderId : 7 } )
+				} );
+
+				expect( body ).notToInclude( "deep-body-secret" );
+				expect( body ).toInclude( "masked" );
+				expect( body ).toInclude( "7" );
+			} );
+
+			it( "masks a JSON array request body", function(){
+				// A JSON array body used to skip masking entirely.
+				makePublic( builder, "buildBody" );
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( [ { apikey : "array-body-secret", id : 1 } ] )
+				} );
+
+				expect( body ).notToInclude( "array-body-secret" );
+				expect( body ).toInclude( "masked" );
+			} );
+
+			it( "masks keys matching a wildcard pattern when the exact lookup misses", function(){
+				settings.maskKeyPatterns = [ "*socialsecurity*" ];
+				var info = {
+					indemnitor1SocialSecurityNumber : "111-22-3333",
+					SOCIALSECURITYNUMBER            : "444-55-6666",
+					socialHandle                    : "@ada"
+				};
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).notToInclude( "111-22-3333" );
+				expect( payload.extraInfo ).notToInclude( "444-55-6666", "matching ignores case" );
+				expect( payload.extraInfo ).toInclude( "@ada", "a near-miss key must stay readable" );
+			} );
+
+			it( "treats a pattern without a wildcard as an exact match", function(){
+				settings.maskKeyPatterns = [ "client_secret" ];
+				var payload = builder.build(
+					newLogEvent( extraInfo = { client_secret : "oauth-secret", client_secret_hint : "keep me" } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo ).notToInclude( "oauth-secret" );
+				expect( payload.extraInfo ).toInclude( "keep me", "anchored matching must not become substring matching" );
+			} );
+
+			it( "applies wildcard patterns to the query string", function(){
+				makePublic( builder, "maskQueryString" );
+				settings.maskKeyPatterns = [ "*socialsecurity*" ];
+
+				expect( builder.maskQueryString( "applicantSocialSecurityNumber=123&id=4" ) )
+					.toBe( "applicantSocialSecurityNumber=*** masked ***&id=4" );
+			} );
+
+			it( "clips a long value and labels it with its real size", function(){
+				var info = structNew( "ordered" );
+				info[ "fileName" ]    = "contract.pdf";
+				info[ "fileContent" ] = repeatString( "A", 5000 );
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( "[truncated, 5000 chars total]" );
+				expect( payload.extraInfo ).toInclude( "contract.pdf", "siblings of a clipped value stay readable" );
+				expect( payload.extraInfo ).notToInclude(
+					repeatString( "A", 501 ),
+					"at most longValueMaxLength characters survive"
+				);
+			} );
+
+			it( "does not clip values under a longValueExemptKeys name", function(){
+				var info = { context : { stacktrace : repeatString( "z", 900 ) } };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "z", 900 ), "stack traces keep their frames" );
+			} );
+
+			it( "disables the per-value cap when longValueMaxLength is 0", function(){
+				settings.longValueMaxLength = 0;
+				var info = { bigField : repeatString( "B", 1500 ) };
+
+				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "B", 1500 ), "only extraInfoMaxLength applies" );
+			} );
+
+			it( "caps a plain-string extraInfo at extraInfoMaxLength, not longValueMaxLength", function(){
+				var payload = builder.build( newLogEvent( extraInfo = repeatString( "m", 1200 ) ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( repeatString( "m", 1200 ) );
+			} );
+
+			it( "stops walking a very wide struct at the budget and reports the leftovers", function(){
+				var wide = structNew( "ordered" );
+				wide[ "apikey" ] = "early-secret";
+				for ( var i = 1; i <= 20000; i++ ) {
+					wide[ "field#i#" ] = "value #i#";
+				}
+
+				var payload = builder.build( newLogEvent( extraInfo = wide ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).notToInclude( "early-secret", "a masked key ahead of the cutoff is still masked" );
+				expect( payload.extraInfo ).toInclude( "more keys]", "the cutoff reports how much was left out" );
+			} );
+
+			it( "replaces content past the depth cap with a marker", function(){
+				var deep = { tail : "bottom" };
+				for ( var i = 1; i <= 6; i++ ) {
+					deep = { "level#i#" : deep };
+				}
+
+				var payload = builder.build( newLogEvent( extraInfo = deep ), "sig-1", 1 );
+
+				expect( payload.extraInfo ).toInclude( "[nested too deep]" );
+				expect( payload.extraInfo ).notToInclude( "bottom" );
+			} );
+
+			it( "passes queries and objects through the walk unchanged", function(){
+				var data    = queryNew( "id,name", "integer,varchar", [ [ 1, "Ada" ] ] );
+				var payload = builder.build(
+					newLogEvent( extraInfo = { result : data, note : "with a query" } ),
+					"sig-1",
+					1
+				);
+				expect( payload.extraInfo ).toInclude( "Ada", "query data keeps its diagnostic value" );
+
+				var withObject = builder.build(
+					newLogEvent( extraInfo = { helper : new coldbox.system.logging.LogLevels(), note : "with an object" } ),
+					"sig-1",
+					1
+				);
+				expect( withObject.extraInfo ).notToInclude(
+					"[object",
+					"objects go to the serializer untouched, not to a marker"
+				);
+			} );
+
+			it( "keeps the other keys when one value cannot be serialized", function(){
+				/* Simulate a serializer failure so the test is fast and consistent on
+				 * every engine. Readable sibling values must remain in the output. */
+				makePublic( builder, "stringify" );
+				makePublic( builder, "toJson" );
+				builder.$( "toJson" ).$callback( function( value ){
+					var text = serializeJSON( arguments.value );
+					if ( text.findNoCase( "EXPLODE" ) ) {
+						throw( type = "SerializerBoom", message = "this value cannot be serialized" );
+					}
+					return text;
+				} );
+
+				var info = structNew( "ordered" );
+				info[ "orderId" ]  = "keep-me-visible";
+				info[ "resource" ] = "EXPLODE";
+
+				var result = builder.stringify( info, 2000 );
+
+				expect( result ).toInclude( "keep-me-visible", "a readable sibling key must not be lost" );
+				expect( result ).toInclude( "could not be serialized", "the failing key reports what was lost" );
+				expect( result ).notToInclude(
+					"[unserializable value]",
+					"one bad value must not discard the whole section"
+				);
+				expect( isJSON( result ) ).toBeTrue( "the rebuilt text must still be valid JSON" );
+			} );
+
+			it( "falls back to the placeholder when nothing can be salvaged", function(){
+				makePublic( builder, "stringify" );
+				makePublic( builder, "toJson" );
+				builder.$( "toJson" ).$callback( function( value ){
+					throw( type = "SerializerBoom", message = "nothing serializes here" );
+				} );
+
+				expect( builder.stringify( { orderId : 1 }, 2000 ) ).toBe( "[unserializable value]" );
+			} );
+
+			it( "respects an extraInfoMaxLength override", function(){
+				settings.extraInfoMaxLength = 100;
+				var payload = builder.build(
+					newLogEvent( extraInfo = { note : repeatString( "n", 400 ) } ),
+					"sig-1",
+					1
+				);
+
+				expect( payload.extraInfo.len() ).toBeLTE( 101, "100 characters plus the ellipsis" );
+			} );
+
+			it( "renders a null value as a placeholder instead of dropping the whole rc", function(){
+				// A null value must not make buildRc discard the complete rc table.
+				makePublic( builder, "sanitizeValue" );
+				expect( builder.sanitizeValue( "anything" ) ).toBe( "[null]" );
 			} );
 
 			it( "captures the ColdBox event, routing detail, and the CGI subset", function(){
@@ -456,6 +689,24 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( builder.maskQueryString( "pass%77ord=abc" ) ).toBe( "pass%77ord=*** masked ***" );
 			} );
 
+			it( "picks up a maskKeys change made after an earlier alert", function(){
+				// build() must refresh masking before it processes the query string.
+				makePublic( builder, "maskQueryString" );
+				builder.build( newLogEvent(), "sig-1", 1 );
+
+				settings.maskKeys = [ "sessionKey" ];
+				builder.build( newLogEvent(), "sig-2", 1 );
+
+				expect( builder.maskQueryString( "sessionKey=abc" ) ).toBe(
+					"sessionKey=*** masked ***",
+					"the newly listed name must be masked"
+				);
+				expect( builder.maskQueryString( "token=abc" ) ).toBe(
+					"token=abc",
+					"a name dropped from the list must no longer be masked"
+				);
+			} );
+
 			it( "includes allowlisted headers and refuses credential headers", function(){
 				makePublic( builder, "buildHeaders" );
 				settings.includeHeaders = [ "Content-Type", "Authorization", "Cookie", "X-Request-Id" ];
@@ -482,6 +733,53 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( body ).toInclude( "7" );
 				expect( body ).notToInclude( "shh", "a JSON field named in maskKeys must be masked" );
 				expect( body ).toInclude( "masked" );
+			} );
+
+			it( "never prints a JSON body whose parse fails", function(){
+				makePublic( builder, "buildBody" );
+				makePublic( builder, "parseJson" );
+
+				/* Force the failure because engines classify malformed JSON differently.
+				 * Adobe rejects a trailing comma that Lucee and BoxLang accept. */
+				builder.$( "parseJson" ).$callback( function( content ){
+					throw( type = "ParserBoom", message = "this body cannot be parsed" );
+				} );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { password : "shh" } )
+				} );
+
+				expect( body ).notToInclude( "shh", "unwalkable JSON must never be printed raw" );
+				expect( body ).toInclude( "could not be parsed" );
+			} );
+
+			it( "never prints a JSON body that parses to a bare value", function(){
+				makePublic( builder, "buildBody" );
+				makePublic( builder, "parseJson" );
+				// A bare string or number carries no field names to mask-check.
+				builder.$( "parseJson", "shh" );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { password : "shh" } )
+				} );
+
+				expect( body ).notToInclude( "shh" );
+				expect( body ).toInclude( "could not be parsed" );
+			} );
+
+			it( "reports an oversized JSON body by size instead of parsing it", function(){
+				makePublic( builder, "buildBody" );
+				builder.$property( propertyName = "MAX_PARSE_CHARS", propertyScope = "variables", mock = 50 );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { apiKey : repeatString( "x", 200 ) } )
+				} );
+
+				expect( body ).toInclude( "too large to mask" );
+				expect( body ).notToInclude( "xxx", "an unparsed body must not be printed" );
 			} );
 
 			it( "skips form bodies and reports binary bodies by size", function(){
@@ -536,9 +834,8 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * newControllerStub
 	 *
-	 * Builds a controller stub with settings and a request collection. The event
-	 * stub answers every context method PayloadBuilder calls, so a missing stub
-	 * method cannot silently drop the whole routing block into its catch.
+	 * Builds a controller stub with settings and a request collection.
+	 * The event stub implements every context method used by PayloadBuilder.
 	 *
 	 * @rc The request collection the stubbed context returns.
 	 */

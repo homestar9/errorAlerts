@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseIntegrationSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines end-to-end alert tests.
+	 */
 	function run(){
 		describe( "End-to-end alerts", function(){
 			beforeEach( function(){
@@ -54,10 +59,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 			} );
 
 			it( "sends one email when RestHandler logs and announces the same exception", function(){
-				/* RestHandler.onAnyOtherException() logs under the calling
-				 * handler's own category and then announces onException, so both
-				 * capture paths see one exception. Only the announced copy has a
-				 * real tagContext, so that is the copy kept. */
+				// Keep the onException copy because it contains the real tagContext.
 				var restExtraInfo = {
 					"_stacktrace" : "java.lang.Exception: rest boom",
 					"httpData"    : { "headers" : { "Authorization" : "Bearer e2e-secret" } }
@@ -94,6 +96,22 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].body ).notToInclude( "e2e-secret", "maskKeys covers extraInfo" );
 			} );
 
+			it( "masks nested secrets and truncates huge values end to end", function(){
+				getController()
+					.getLogBox()
+					.getLogger( "integrationTest" )
+					.error( "big payload boom", {
+						"context"     : { "apikey" : "e2e-nested-secret" },
+						"fileContent" : repeatString( "A", 50000 )
+					} );
+
+				var mailbox = getMailbox();
+				expect( mailbox.len() ).toBe( 1 );
+				expect( mailbox[ 1 ].body ).notToInclude( "e2e-nested-secret", "masking reaches nested extraInfo keys" );
+				expect( mailbox[ 1 ].body ).toInclude( "truncated" );
+				expect( mailbox[ 1 ].body ).toInclude( "50000 chars total", "a clipped value states its real size" );
+			} );
+
 			it( "ignores categories on the ignore list", function(){
 				getController().getLogBox().getLogger( "cbmailservices.queue" ).error( "mail down" );
 				getController().getLogBox().getLogger( "coldbox.system.Bootstrap" ).error( "already intercepted" );
@@ -109,9 +127,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				try {
 					settings.throttle.windowSeconds = 1;
 
-					// Give the request context an event so the digest's route
-					// sample has something to record. A bare test request has
-					// no routed URL and no current event.
+					// Add an event because a bare test request has no route to sample.
 					getRequestContext().setValue( "event", "main.digestTest" );
 
 					var logger = getController().getLogBox().getLogger( "integrationTest" );
