@@ -1,10 +1,9 @@
 /**
  * FrameClassifier
  *
- * Decides whether a stack frame belongs to the application or to framework
- * code, using the settings.applicationFramePrefixes list. PayloadBuilder uses
- * it to pin the first application-owned frame in the email, and
- * SignatureService uses the same frame when grouping errors.
+ * Uses settings.applicationFramePrefixes to identify application stack frames.
+ * PayloadBuilder shows the first matching frame in the email. SignatureService
+ * uses the same frame when it groups errors.
  */
 component singleton accessors="true" {
 
@@ -15,13 +14,13 @@ component singleton accessors="true" {
 	/**
 	 * appRelativePath
 	 *
-	 * Returns the path relative to the application root, starting with "/",
-	 * with backslashes normalized to forward slashes. Returns an empty string
-	 * for a path outside the application root, or when the root is unknown.
+	 * Returns a stack-frame path relative to the application root.
+	 * The result starts with "/" and uses forward slashes. A path outside the
+	 * application root returns an empty string.
 	 *
-	 * This always strips the root, unlike PayloadBuilder.relativeTemplate(),
-	 * which obeys the settings.relativePaths display setting. Classification
-	 * must work the same no matter how paths are displayed.
+	 * This method always removes the root. PayloadBuilder.relativeTemplate()
+	 * follows the relativePaths display setting instead. Display settings must
+	 * not change frame classification.
 	 *
 	 * @template The absolute file path from a stack frame.
 	 */
@@ -67,12 +66,11 @@ component singleton accessors="true" {
 	/**
 	 * findFirstApplicationFrame
 	 *
-	 * Scans a raw tagContext array for the first application-owned frame.
-	 * Returns { index, template, line } with the raw template path, or an
-	 * empty struct when no frame qualifies within maxScan frames.
+	 * Finds the first application frame in a raw tagContext array.
+	 * Returns its index, template, and line. Returns an empty struct if the first
+	 * maxScan frames contain no match.
 	 *
-	 * Driver frames like "|SQLServer|6.0|" can never match a prefix, so no
-	 * separate skip rule is needed here.
+	 * Database driver frames cannot match an application path prefix.
 	 *
 	 * @tagContext The raw tagContext array from the exception.
 	 * @maxScan    How many frames to inspect before giving up.

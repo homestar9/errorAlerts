@@ -11,9 +11,8 @@ component {
 	 * Configures the test harness.
 	 */
 	function configure(){
-		/* Set ERRORALERTS_MAILER=smtp in .env to send real email to a local SMTP
-		 * server instead of the in-memory mailbox. The TestBox specs read the
-		 * in-memory mailbox, so "default" has to stay the fallback. */
+		/* ERRORALERTS_MAILER=smtp sends mail to a local SMTP server. Tests need
+		 * the default in-memory mailer so they can inspect sent messages. */
 		var mailer    = getSystemSetting( "ERRORALERTS_MAILER", "default" );
 		var smtpMode  = mailer == "smtp";
 
@@ -59,10 +58,8 @@ component {
 					// Send through the cfmail tag to a real SMTP server.
 					"smtp"    : { class : "CFMail" }
 				},
-				/* MailService.newMail() copies these into every mail payload and
-				 * CFMailProtocol hands the payload straight to cfmail. spoolEnable
-				 * has to be false or Adobe writes the mail to disk and sends it on a
-				 * timer, which hides delivery errors. */
+				/* CFMailProtocol passes these defaults to cfmail. Disable spooling so
+				 * Adobe reports delivery errors during the request. */
 				defaults        : {
 					server      : getSystemSetting( "ERRORALERTS_SMTP_SERVER", "127.0.0.1" ),
 					port        : getSystemSetting( "ERRORALERTS_SMTP_PORT", 25 ),
@@ -76,12 +73,8 @@ component {
 				subjectPrefix : "[Harness]",
 				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send",
-				/* Deliberately partial. ColdBox merges module settings one level
-				 * deep, so this drops rc, cgi and extraInfo unless the module puts
-				 * them back in onLoad(). `session : false` is the shipped value,
-				 * so the harness behaves exactly as it would with no override at
-				 * all - but if that repair ever regresses, every spec that reads
-				 * an rc table fails instead of the bug reaching a release. */
+				/* Keep this override partial to test that module startup restores rc,
+				 * cgi, and extraInfo defaults. session keeps its normal false value. */
 				includeScopes : { session : false },
 				/* The module ships with an empty maskKeys: masking is opt-in.
 				 * The harness opts in so the masking demo routes and the
@@ -101,10 +94,8 @@ component {
 			}
 		};
 
-		/* Shorten the throttle window during SMTP preview so a digest email arrives
-		 * about a minute after a burst instead of ten. ColdBox merges module
-		 * settings one level deep, so every throttle key has to be listed here.
-		 * maxPerWindow stays at 3 because EndToEndAlertTest asserts 3-of-5. */
+		/* Use a shorter throttle window for SMTP previews. Include every nested key
+		 * because ColdBox replaces the whole throttle struct. */
 		if ( smtpMode ) {
 			variables.moduleSettings.errorAlerts.throttle = {
 				maxPerWindow         : 3,
@@ -119,6 +110,11 @@ component {
 	 * afterAspectsLoad
 	 *
 	 * Loads the module from the repository after the application starts.
+	 *
+	 * @event         The current request context.
+	 * @interceptData Data passed to this interception point.
+	 * @rc            The request collection.
+	 * @prc           The private request collection.
 	 */
 	function afterAspectsLoad( event, interceptData, rc, prc ){
 		controller

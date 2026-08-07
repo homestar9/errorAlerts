@@ -1,9 +1,8 @@
 /**
  * OrderService
  *
- * Fake business service used by the Trigger handler. Its methods fail the way
- * real application code fails, so the alert email shows a stack that starts in
- * a handler and ends several components deep.
+ * Provides realistic service failures for the Trigger handler.
+ * The resulting stacks pass through several application components.
  */
 component singleton {
 

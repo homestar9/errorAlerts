@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseIntegrationSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines registration and settings integration tests.
+	 */
 	function run(){
 		describe( "Module registration", function(){
 			it( "registers the appender in the LogBox registry", function(){
@@ -37,10 +42,8 @@ component extends="tests.resources.BaseIntegrationSpec" {
 			} );
 
 			it( "fills the keys a partial includeScopes override dropped", function(){
-				/* ColdBox merges module settings one level deep, so this is the
-				 * whole struct the module receives when an application asks for
-				 * session ids. Without the repair, PayloadBuilder.build() throws
-				 * on includeScopes.rc and the application gets no alerts at all. */
+				/* ColdBox replaces the complete nested struct. Module startup must
+				 * restore the missing includeScopes defaults. */
 				var settings = { includeScopes : { session : true } };
 				moduleConfig.applyNestedDefaults( settings );
 
@@ -89,9 +92,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 			} );
 
 			it( "repairs the settings struct the running module actually uses", function(){
-				/* The harness config sets a deliberately partial includeScopes, so
-				 * this asserts onLoad() repaired the same struct instance WireBox
-				 * injects rather than a copy of it. */
+				// Confirm that WireBox receives the repaired settings struct.
 				var live = getController().getSetting( "moduleSettings" ).errorAlerts;
 
 				for ( var key in [ "rc", "cgi", "extraInfo", "session" ] ) {

@@ -3,17 +3,14 @@
  *
  * Run it with: box run-script test:engines
  *
- * Do this before a release. It is deliberately not part of the release itself: an engine that
- * fails to start should not stop a publish, and the release already runs the suite once on
- * whichever engine is up.
+ * Run this before a release. The release task runs the suite only on the server
+ * that is already active.
  *
- * Every engine shares the same port, so this runs strictly in order: stop everything, start
- * one engine, wait for it to answer, run the suite, stop it, move to the next. Expect it to
- * take a while. The first run of an engine also downloads it, which takes longer still.
+ * Every engine uses the same port. The task stops all engines, then starts,
+ * tests, and stops each engine in order. A first run may also download an engine.
  *
- * Every engine gets its turn even when an earlier one fails, so one broken engine never hides
- * the others. The end of the run prints a line per engine, and the task still exits with an
- * error if any of them failed.
+ * A failed engine does not skip later engines. The final report lists every
+ * result and returns an error when any engine failed.
  *
  * List your engines in build/build.json.
  */
@@ -33,9 +30,8 @@ component {
 	/**
 	 * run
 	 *
-	 * Runs the suite on each engine in turn. Every engine gets its turn even when an earlier one
-	 * fails. Prints a line per engine at the end and errors out if any of them failed, so a
-	 * failure still stops CI and the release. Leaves every server stopped either way.
+	 * Runs the suite on each engine and reports every result.
+	 * All servers are stopped at the end. Any failed result makes the task fail.
 	 */
 	function run(){
 		if ( !arrayLen( variables.s.engines ) ) {
@@ -108,21 +104,19 @@ component {
 		return report( results, started );
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
+	/******************************** Private helpers ********************************/
 
 	/**
 	 * startEngine
 	 *
-	 * Starts one engine's server. Returns { ok, reason } rather than stopping the run, so the
-	 * sweep can record the failure and move on to the next engine.
+	 * Starts one engine and returns an ok flag and reason.
+	 * A failed start does not stop the remaining engine tests.
 	 *
 	 * @engine     The engine entry from build.json.
 	 * @engineName The name to show.
 	 */
 	private struct function startEngine( required struct engine, required string engineName ){
-		// Make sure the port is actually free first. Stopping a server returns before the old
-		// process lets go of the port, and starting the next one then fails for a reason that
-		// has nothing to do with the engine.
+		// Wait for the previous server to release the shared port.
 		waitForPortToFree( arguments.engineName );
 
 		var startFailed = false;
@@ -163,9 +157,8 @@ component {
 	/**
 	 * waitForPortToFree
 	 *
-	 * Waits until nothing answers on the test port, so the next engine is not started while the
-	 * last one is still letting go of it. Gives up after a short wait and lets the start attempt
-	 * produce the real error.
+	 * Waits briefly for the shared test port to become free.
+	 * A timeout lets the next start command report the actual error.
 	 *
 	 * @engineName The engine about to start, for the message.
 	 */
@@ -202,9 +195,8 @@ component {
 	/**
 	 * warmUp
 	 *
-	 * Waits until the site answers, so the suite never runs against a server that is still
-	 * starting up. A half-started app produces failures that look real but are not. Returns
-	 * { ok, reason } so the sweep can record the failure and move on to the next engine.
+	 * Waits for the application to answer before running tests.
+	 * Returns an ok flag and reason so a startup failure does not stop later engines.
 	 *
 	 * @engine     The engine entry from build.json.
 	 * @engineName The name to show.
@@ -255,8 +247,7 @@ component {
 	/**
 	 * stopAllEngines
 	 *
-	 * Stops every listed engine, ignoring failures. At most one is running, and stopping one
-	 * that is not running only prints a complaint.
+	 * Stops every configured engine and ignores stop failures.
 	 */
 	private function stopAllEngines(){
 		print.blueLine( "Stopping any running server..." ).toConsole();
@@ -268,8 +259,7 @@ component {
 	/**
 	 * stopEngine
 	 *
-	 * Stops one server quietly. A failure here never matters: either it was not running, or
-	 * the next start will complain about the port anyway.
+	 * Stops one server without reporting a failure.
 	 *
 	 * @configFile The server json file for the engine to stop.
 	 */
@@ -304,8 +294,7 @@ component {
 	/**
 	 * report
 	 *
-	 * Prints a line per engine and ends the task. Errors out when any engine failed, so the
-	 * exit code still says the sweep was not clean.
+	 * Prints all engine results and fails the task when any result failed.
 	 *
 	 * @results One entry per engine, in the order they ran.
 	 * @started The tick count from when the whole sweep began.
@@ -346,9 +335,8 @@ component {
 	 *
 	 * Stops the task, printing guidance that spans several lines.
 	 *
-	 * CommandBox's error() removes line breaks from its message, so anything longer than a
-	 * sentence arrives as one run-together block. The guidance is printed first, where it keeps
-	 * its shape, and error() is left with the single line that says what went wrong.
+	 * CommandBox error() removes line breaks. Print detailed guidance first so
+	 * its formatting stays readable.
 	 *
 	 * @summary One line saying what went wrong.
 	 * @detail  Lines of guidance to print first.

@@ -25,13 +25,10 @@ component singleton {
 	/**
 	 * refund
 	 *
-	 * Catches a low-level failure and throws a higher-level one that carries the
-	 * original error, which is how most application code reports a wrapped
-	 * failure.
+	 * Replaces a low-level failure with a higher-level payment error.
 	 *
-	 * Lucee's throw() takes a `cause` argument, but Adobe's does not and rejects
-	 * it while compiling, even on a branch that would never run. So the original
-	 * error is carried in `extendedInfo` instead, which works everywhere.
+	 * Lucee supports a cause argument on throw(), but Adobe rejects it during
+	 * compilation. extendedInfo carries the original error on every engine.
 	 *
 	 * @transactionId The transaction to refund.
 	 */

@@ -2,8 +2,8 @@
  * UnhandledExceptionCapture
  *
  * Receives unhandled exceptions from ColdBox's onException interception point.
- * ColdBox does not log the exception when an application has a custom
- * exceptionHandler, so ErrorAlertAppender cannot capture it in that case.
+ * A custom exceptionHandler stops ColdBox from logging the exception. This
+ * interceptor makes sure ErrorAlertAppender is not the only capture path.
  *
  * Without a custom handler, ColdBox also logs the exception under
  * coldbox.system.Bootstrap. The default ignore list skips that event to prevent
@@ -17,8 +17,8 @@ component extends="coldbox.system.Interceptor" {
 	 * onException
 	 *
 	 * Converts an unhandled exception to a LogEvent and captures it.
-	 * The request flag must be checked before capture. Moving it later would
-	 * allow an exception during capture to enter this method again.
+	 * The request flag prevents an exception during capture from calling this
+	 * method again.
 	 *
 	 * @event  The current request context.
 	 * @data   The interception data. `data.exception` holds the cfcatch struct.

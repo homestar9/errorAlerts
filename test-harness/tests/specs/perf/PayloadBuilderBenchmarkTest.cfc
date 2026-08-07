@@ -1,24 +1,24 @@
 /**
- * Times PayloadBuilder.build() against large inputs so the module's overhead on
- * a host application is measured, not guessed.
+ * Measures PayloadBuilder.build() with large inputs.
  *
- * The reported numbers in the debug output are the real deliverable. The
- * assertions are deliberately generous ceilings: they exist to catch an
- * order-of-magnitude regression, not engine jitter. Run this bundle alone with:
+ * Debug output contains the measured times. The generous limits catch major
+ * regressions without failing because of normal engine timing changes.
  *
  *   /tests/runner.cfm?directory=tests.specs.perf&reporter=text
  */
 component extends="tests.resources.BaseUnitSpec" {
 
-	// How many times each scenario runs. The first run pays any warm-up cost,
-	// so the minimum is the honest number and the average shows variance.
+	// Report the minimum after warm-up and the average across all runs.
 	variables.ITERATIONS = 5;
 
-	// Generous per-scenario ceiling in milliseconds. A healthy engine finishes
-	// every scenario far below this; only a runaway walk or a full serialization
-	// of a multi-megabyte payload should ever cross it.
+	// This high limit catches unbounded walking or full large-value serialization.
 	variables.CEILING_MS = 10000;
 
+	/**
+	 * run
+	 *
+	 * Defines PayloadBuilder performance scenarios.
+	 */
 	function run(){
 		describe( "PayloadBuilder benchmarks", function(){
 			beforeEach( function(){
@@ -177,8 +177,8 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * timeScenario
 	 *
-	 * Runs a scenario ITERATIONS times, reports min and average milliseconds
-	 * through the debug buffer, and returns both numbers for the assertion.
+	 * Runs a scenario several times and returns its minimum and average duration.
+	 * The method also writes both values to TestBox debug output.
 	 *
 	 * @label    The scenario name shown in the debug output.
 	 * @scenario The zero-argument closure to time.
@@ -208,9 +208,8 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * benchControllerStub
 	 *
-	 * Builds the minimal controller stub PayloadBuilder needs: request context,
-	 * app settings, and the module registry. Mirrors the stub in
-	 * PayloadBuilderTest so benchmark payloads flow through the same paths.
+	 * Builds the controller stub needed by PayloadBuilder benchmarks.
+	 * It provides a request context, application settings, and module registry.
 	 *
 	 * @rc The request collection the stubbed context returns.
 	 */

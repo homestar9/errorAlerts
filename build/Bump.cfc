@@ -3,17 +3,14 @@
  *
  * Run it with: box run-script bump:patch (or bump:minor, bump:major)
  *
- * It does two things, so cutting a release is one command instead of hand editing:
+ * It prepares two release changes:
  *   1. Raises the version in box.json.
- *   2. Moves everything under "## [Unreleased]" in the changelog into a new dated section for
- *      the new version, and leaves a fresh empty [Unreleased] behind.
+ *   2. Moves the Unreleased notes into a dated section for the new version.
  *
- * It does not commit, tag, or publish. You review the change and commit it yourself. The
- * checks that protect a release live in Release.cfc and run at release time.
+ * It does not commit, tag, or publish. Review and commit the changes yourself.
  *
- * First release: box.json may already hold the version you want to ship, so raising it would
- * skip a number. Use :level=none to date the notes as the current version without changing
- * box.json.
+ * For a first release, use :level=none when box.json already has the version to
+ * publish. This dates the notes without changing the version.
  */
 component {
 
@@ -59,8 +56,7 @@ component {
 		var newVersion = ( lvl == "none" ) ? current : nextVersion( current, lvl, trim( arguments.preid ) );
 		var today      = dateFormat( now(), "yyyy-mm-dd" );
 
-		// Work out the new changelog before writing anything. A missing or empty [Unreleased]
-		// then stops the run cleanly, instead of leaving box.json raised and the changelog not.
+		// Validate the new changelog before changing box.json.
 		var newChangelog = buildChangelog( newVersion, today );
 
 		if ( arguments.dryRun ) {
@@ -98,17 +94,15 @@ component {
 			.toConsole();
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
+	/******************************** Private helpers ********************************/
 
 	/**
 	 * fail
 	 *
 	 * Stops the task, printing guidance that spans several lines.
 	 *
-	 * CommandBox's error() removes line breaks from its message, so anything longer than a
-	 * sentence arrives as one run-together block. The guidance is printed first, where it keeps
-	 * its shape, and error() is left with the single line that says what went wrong. That is
-	 * also why the list appears above the error rather than below it: error() ends the task.
+	 * CommandBox error() removes line breaks and ends the task. Print detailed
+	 * guidance first so its formatting stays readable.
 	 *
 	 * @summary One line saying what went wrong.
 	 * @detail  Lines of guidance to print first.
@@ -172,8 +166,8 @@ component {
 	 *
 	 * Works out the next version.
 	 *
-	 * The prerelease rules follow SemVer, where 1.1.0-beta.3 comes BEFORE 1.1.0. So finishing a
-	 * prerelease settles on the version it was leading up to rather than stepping past it:
+	 * SemVer places 1.1.0-beta.3 before 1.1.0. Finishing a prerelease
+	 * returns the version that the prerelease was testing:
 	 *
 	 *   1.1.0-beta.3  patch       -> 1.1.0        the version the beta was for
 	 *   1.1.0-beta.3  minor       -> 1.1.0        same, because the patch part is 0
@@ -232,9 +226,9 @@ component {
 	/**
 	 * nextPrerelease
 	 *
-	 * Steps an existing prerelease forward: beta.3 becomes beta.4. A prerelease with no number
-	 * gets one, so 1.0.0-beta becomes 1.0.0-beta.1. Asking for a different label starts that
-	 * label at 1, so beta.3 with preid alpha becomes alpha.1.
+	 * Advances an existing prerelease number.
+	 * beta.3 becomes beta.4. A missing number starts at 1. A new label also
+	 * starts at 1.
 	 *
 	 * @parsed The current version, already split up.
 	 * @preid  The wanted label, or empty to keep the current one.
@@ -265,7 +259,7 @@ component {
 			label = arrayToList( segments, "." );
 		}
 
-		// Switching label starts the count again, so alpha.7 to beta gives beta.1, not beta.8.
+		// A new prerelease label starts its own count at 1.
 		if ( len( arguments.preid ) && arguments.preid != label ) {
 			return "#core#-#arguments.preid#.1";
 		}
@@ -276,8 +270,7 @@ component {
 	/**
 	 * setBoxVersion
 	 *
-	 * Writes the new version into box.json, replacing only that one value so the rest of the
-	 * file keeps its formatting.
+	 * Replaces only the version value in box.json so formatting stays unchanged.
 	 *
 	 * @version The new version.
 	 */
@@ -285,10 +278,7 @@ component {
 		var boxPath = variables.config.repoPath( "box.json" );
 		var raw     = fileRead( boxPath );
 
-		// Find the first "version":"..." and replace what sits between the quotes. This splices
-		// the text rather than using a replacement pattern: a pattern like "\1" placed directly
-		// before a version starting with a digit reads as a different group number and eats
-		// characters.
+		// Splice the value directly so a version digit cannot change a regex group number.
 		var m = reFind( '("version"\s*:\s*")([^"]*)(")', raw, 1, true );
 		if ( !arrayLen( m.pos ) || m.pos[ 1 ] == 0 ) {
 			return error( "Could not find a ""version"" entry in box.json." );
@@ -301,12 +291,11 @@ component {
 	/**
 	 * buildChangelog
 	 *
-	 * Returns the whole changelog with the [Unreleased] notes moved into a new dated section.
-	 * Stops the run when there is no [Unreleased] section or it holds nothing, so a release can
-	 * never go out with empty notes.
+	 * Moves the Unreleased notes into a new dated changelog section.
+	 * A missing or empty Unreleased section stops the task.
 	 *
-	 * A note on hashes: in CFML a doubled ## in a string means one literal #. So the patterns
-	 * below use #### to match a two-hash "## " markdown heading.
+	 * CFML uses ## for one literal # inside a string. The patterns use #### to
+	 * match the two hashes in a Markdown heading.
 	 *
 	 * @version The version to date the section with.
 	 * @date    Today, as YYYY-MM-DD.
@@ -363,8 +352,7 @@ component {
 			return error( "The ""#### [Unreleased]"" section in #variables.s.changelog# is empty. Write the release notes first." );
 		}
 
-		// Rebuild: everything up to the now empty [Unreleased] heading, the new dated section
-		// with the notes, then whatever followed.
+		// Insert the dated section after the now empty Unreleased heading.
 		var out = [];
 		for ( var i = 1; i <= unreleasedIdx; i++ ) {
 			out.append( lines[ i ] );

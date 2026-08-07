@@ -9,142 +9,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Masking is now opt-in: `maskKeys` defaults to an empty array.** The nine
-  former default entries (`password`, `passwd`, `token`, `secret`, `apikey`,
-  `api_key`, `authorization`, `creditcard`, `cvv`) are gone. An application that
-  never set `maskKeys` and relied on those names being hidden must now list its
-  own field names; the README's new "Masking and sanitization" section carries a
-  starter list to copy. Applications that already set `maskKeys` are unaffected,
-  because overriding the setting always replaced the whole list.
-- Keys nested inside `rc` values and inside JSON request bodies are now masked.
-  Before this, only top-level names were checked, so `rc.payment.cardNumber`
-  was serialized into the email in full while a top-level `cardNumber` was
-  masked. JSON **array** request bodies, which previously skipped masking
-  entirely, are walked too.
-- A JSON request body is no longer printed raw when the sanitizer cannot walk
-  it. `isJSON()` accepts text that `deserializeJSON()` then rejects, and the
-  failure fell through to printing the body verbatim, so a body containing a
-  masked field name could reach the email unmasked. The same fall-through
-  applied to a body that parsed to a bare string or number. Both now report the
-  body by size instead. A body that is not JSON at all still prints as sent:
-  there are no field names to match, and the README lists that under "What key
-  masking can never reach".
+- **Masking is now opt-in.** `maskKeys` defaults to an empty array. The old
+  defaults were `password`, `passwd`, `token`, `secret`, `apikey`, `api_key`,
+  `authorization`, `creditcard`, and `cvv`. Applications that relied on those
+  defaults must now list their own sensitive fields. Applications that already
+  set `maskKeys` are not affected. The README provides a starter list.
+- Masking now checks nested keys in `rc` values and JSON bodies. Earlier
+  versions only checked top-level keys. JSON array bodies are also walked.
+- JSON that cannot be walked is reported by size instead of printed raw. This
+  includes parse failures, values that are too large to parse, and JSON strings
+  or numbers with no field names. Non-JSON bodies are still shown as sent because
+  key masking has no field names to check.
 
 ### Fixed
 
-- **A partial nested setting no longer stops every alert.** ColdBox merges
-  module settings one level deep, so an application that wrote
-  `includeScopes : { session : true }` lost `rc`, `cgi` and `extraInfo` from the
-  struct. `PayloadBuilder.build()` threw while reading them, `CaptureService`
-  swallowed the failure, and the application silently received no alerts at all
-  - one line on System.err was the only sign. A partial `throttle` did the same
-  and additionally made throttling fail open. The module now puts the missing
-  keys of `throttle` and `includeScopes` back at startup, so overriding one key
-  and leaving the rest alone works as expected. Applications that always wrote
-  both structs in full are unaffected.
-- A JSON request body larger than 2 MB is reported by size instead of parsed.
-  `deserializeJSON()` had to build the whole object graph before the
-  budget-bounded walk could start, which allocated several times the body's
-  size inside error handling on a server that was already in trouble.
-- Query-string masking could use the masking configuration compiled for a
-  previous alert. The query string is the first thing an alert masks, and the
-  configuration was only recompiled once a later step noticed a settings
-  change. Settings do not change in production, so this showed up as
-  order-dependent test results rather than a live fault.
-- One value the engine's JSON serializer refuses no longer discards the whole
-  section it sits in. `extraInfo` is serialized as a unit, so a single value
-  that failed used to replace everything with `[unserializable value]`, losing
-  every other key the application logged. The struct is now retried one key at
-  a time: keys that convert keep their content, and the failing key alone is
-  replaced with a marker naming its type. A real trigger is a component or Java
-  object with a large internal graph, which passes through the walk untouched
-  and can overflow the serializer.
+- **Partial nested settings no longer stop alerts.** ColdBox replaces nested
+  structs instead of merging their keys. A partial `includeScopes` override
+  could remove `rc`, `cgi`, and `extraInfo`, which made alert building fail. A
+  partial `throttle` override could also disable throttling. Module startup now
+  restores missing keys without replacing application values.
+- JSON request bodies larger than 2 MB are reported by size. Parsing a larger
+  body could use several times the body's size in memory before sanitizing began.
+- Query-string masking now refreshes its configuration before reading the first
+  field. Tests could previously reuse masking settings from an earlier alert.
+- One value rejected by the JSON serializer no longer hides the complete
+  section. Structs are retried one key at a time. Readable values stay visible,
+  and a failing component or Java object becomes a marker with its type.
 
 ### Added
 
-- `maskKeyPatterns` setting: wildcard field-name matching for vendor spellings
-  an exact list cannot keep up with, such as `indemnitor1SocialSecurityNumber`.
-  `*` matches any run of characters; matching ignores case, covers the whole
-  name, and runs only when the exact `maskKeys` lookup misses.
-- `longValueMaxLength` setting, default `500`: any string value found while
-  walking `extraInfo` or a JSON body keeps this many characters plus a label
-  such as `[truncated, 245120 chars total]`. This is the answer to base64 PDFs
-  and other blobs landing in payloads. `0` disables the per-value cap.
-- `longValueExemptKeys` setting, default `[ "_stacktrace", "stacktrace" ]`:
-  values under these keys skip the per-value cap so stack traces keep their
-  frames.
-- `extraInfoMaxLength` setting, default `2000`: the `extraInfo` output cap,
-  previously hardcoded.
-- A benchmark suite at `tests/specs/perf` timing alert building against large
-  payloads, runnable alone with `?directory=tests.specs.perf`.
+- `maskKeyPatterns` adds wildcard field matching. `*` matches any number of
+  characters. Matching ignores case, covers the complete field name, and runs
+  only when `maskKeys` has no exact match.
+- `longValueMaxLength`, default `500`, limits each string in `extraInfo` or a
+  JSON body. Truncated values include their original size. Set it to `0` to
+  disable the per-value limit.
+- `longValueExemptKeys`, default `[ "_stacktrace", "stacktrace" ]`, keeps
+  selected values from using the per-value limit.
+- `extraInfoMaxLength`, default `2000`, makes the old hardcoded section limit
+  configurable.
+- `tests/specs/perf` measures alert building with large payloads. Run it with
+  `?directory=tests.specs.perf`.
 
 ### Changed
 
-- The sanitizer was rebuilt around one budget-bounded walk. Masked-key lookup
-  is now a hash check, so the length of `maskKeys` no longer affects alert
-  cost, and the walk stops collecting once it has enough content to fill the
-  email. A 5 MB string in `extraInfo` previously cost a full serialization to
-  produce 2,000 characters of email; it now costs a bounded copy. Very wide
-  structures stop early and report `[N more keys]` in place of the rest. A
-  cutoff can only omit content, never bypass masking.
-- The masking configuration is compiled once per alert rather than once per
-  `rc` key and once per header. Each compile rebuilt a fingerprint from three
-  list joins, so a wide `rc` paid for the same work dozens of times over.
+- Sanitizing now uses one shared character budget. Exact field names use a hash
+  lookup. Large strings and wide structures stop after enough content has been
+  collected. Omitted fields are reported as `[N more keys]`. Every displayed
+  value still passes the mask check.
+- The masking configuration is compiled once per alert instead of once per `rc`
+  key and header.
 - Long simple values in the `rc` table now end with the size label instead of a
   bare ellipsis.
-- A null `rc` value now renders `[null]`. Before this it threw inside the
-  sanitizer and the whole `rc` table silently disappeared from the email.
+- A null `rc` value now renders `[null]` instead of hiding the complete `rc`
+  table.
 
 ## [2.4.0] - 2026-08-05
 
 ### Security
 
-- `extraInfo` values are now masked with `maskKeys` at any nesting depth, up to
-  five levels. Before this, a struct passed as the second argument to
-  `logger.error()` was serialized into the email exactly as given, so a key such
-  as `password` or `authorization` was printed in full. Applications using
-  `coldbox.system.RestHandler` were affected without doing anything: RestHandler
-  passes `getHTTPRequestData()` into `extraInfo`, which carries every request
-  header, including `Authorization`. The `Cookie` and `Authorization` block in
-  the Request section never covered this, because that value arrives through
-  `extraInfo` instead of through `includeHeaders`.
-- Query parameter values, and an exception's `detail` and `extendedInfo`, are
-  still not masked. They carry no field names to match against. This is now
-  stated in the README rather than left unsaid.
+- `maskKeys` now checks `extraInfo` values up to five levels deep. This also
+  protects request headers that RestHandler places inside `extraInfo`, including
+  `Authorization`. The Request section's header blocklist does not cover this
+  separate path.
+- Bound query values, exception `detail`, and exception `extendedInfo` remain
+  unmasked because they have no field names. The README now states this limit.
 
 ### Fixed
 
-- Applications whose handlers extend `coldbox.system.RestHandler` no longer
-  receive two alert emails for one exception. `RestHandler.onAnyOtherException()`
-  logs the exception and then announces `onException` on the next line, so both
-  the module's LogBox appender and its interceptor captured the same failure.
-  The two copies had different categories and messages, so throttling treated
-  them as unrelated errors and sent both. `ignoreCategories` could not filter the
-  logged copy, because RestHandler logs under the calling handler's own category,
-  which differs for every handler.
-- The logged copy is the one dropped. Only the announced copy carries a real
-  `tagContext`, so it is the only one that can produce stack frames, an
-  application-frame attribution, and a code snippet.
-- `RestHandler.onError()` logs the same shape but announces nothing, so its
-  alert is kept. Suppressing it would have removed the only report of a
-  failure in `preHandler`, `postHandler`, or `aroundHandler`.
+- RestHandler exceptions no longer send two alerts. RestHandler logs an action
+  error and then announces `onException`. The reports use different categories
+  and messages, so throttling could not combine them. Category rules also could
+  not match every handler category.
+- The logged copy is dropped. Only the `onException` announcement contains the
+  tagContext needed for stack frames, application attribution, and source code.
+- `RestHandler.onError()` logs without announcing, so its report is kept. This
+  covers errors in `preHandler`, `postHandler`, and `aroundHandler`.
 
 ### Added
 
-- `suppressDuplicateFrameworkLogs` setting, default `true`. Set it to `false`
-  only if you have unregistered the module's `UnhandledExceptionCapture`
-  interceptor, since that interceptor reports the copy that is kept.
+- `suppressDuplicateFrameworkLogs`, default `true`, controls RestHandler
+  duplicate removal. Set it to `false` only after unregistering the module's
+  `UnhandledExceptionCapture` interceptor.
 
 ## [2.3.0] - 2026-08-04
 
 ### Changed
 
-- Error signatures now include the first application-owned stack frame, so two
-  call sites that fail with the same message throttle separately. Before this,
-  every database error hashed the same framework grammar frame and unrelated
-  failing queries only differed by message text. Every signature changes once
-  on upgrade, which restarts any open throttle window; a burst in progress
-  during the deploy may send up to `maxPerWindow` extra emails.
+- Error signatures now include the first application stack frame. Different
+  call sites with the same message use separate throttle windows. This is most
+  useful for database errors that share one framework frame. Existing throttle
+  windows restart during upgrade and may allow `maxPerWindow` extra emails.
 - `relativePaths` now defaults to `true`: paths inside the application root
   render as `/handlers/Main.cfc` instead of the full absolute path. Paths
   outside the root are still shown in full. Set the flag back to `false` for
@@ -152,12 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The email pins the first stack frame that belongs to the application itself
-  (handler, model, view), even when it sits past the `stackFrames` display cap,
-  and highlights it in the frame list. Which folders count as application code
-  is configurable with `applicationFramePrefixes`.
-- A second source snippet, "Application caller", showing the application line
-  that asked for the failing work, next to the existing throw-site snippet.
+- The email highlights the first application stack frame, even when it falls
+  past the `stackFrames` limit. `applicationFramePrefixes` defines application
+  paths.
+- An "Application caller" source snippet shows the application line next to the
+  throw-site snippet.
 - Rows such as "... 5 frames omitted" and "... 3 more frames not shown" mark
   where the stack list is shortened. Previously the list stopped silently at
   ten frames and looked complete.
@@ -169,28 +123,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versions.
 - An `elapsed` row showing how long the request had been running when it
   failed, on engines that expose the request start time (Lucee, BoxLang).
-- Digest emails list the distinct routes and client IPs seen during the
-  throttle window - "3 distinct routes from 1 client IP" identifies a crawler
-  at a glance. Capped by the new `digestSampleSize` setting; `0` disables it.
-  The client IP row reads the `X-Forwarded-For` header when the request sends
-  one, so treat its value as a diagnostic hint rather than proof of origin.
+- Digest emails list distinct routes and client IP addresses. `digestSampleSize`
+  limits both lists, and `0` disables them. A client can control
+  `X-Forwarded-For`, so the IP address is a hint rather than proof.
 
 ### Internal
 
-These change how the project is built and released. They do not ship in the
-published package.
+These changes only affect project development and release tasks.
 
-- The release task can publish a version whose tag already exists at HEAD,
-  through the new `release:existing-tag` script. This is what a tag-triggered
-  CI job needs, since the tag is created before the job runs.
+- `release:existing-tag` publishes a tag that already points to HEAD. This
+  supports CI jobs triggered after a tag is created.
 - `release:hotfix` is now also available under the clearer name
   `release:skip-tests`. Both names still work.
-- `test:engines` runs every engine even after one fails, then prints a pass or
-  fail line for each. It used to stop at the first failure, which hid whether
-  the others would have passed.
-- The release no longer runs `git checkout -f` before pulling. It uses
-  `git pull --ff-only`, so uncommitted work can no longer be discarded by
-  starting a release.
+- `test:engines` runs and reports every engine even after one fails.
+- Releases use `git pull --ff-only` instead of `git checkout -f`. Starting a
+  release can no longer discard uncommitted work.
 
 ## [2.2.0] - 2026-07-28
 
@@ -200,34 +147,29 @@ published package.
 
 ### Changed
 
-- **BREAKING:** `maskKeys` now matches field names exactly (ignoring case)
-  instead of by substring. A key such as `apiToken`, previously masked by the
-  `token` entry, is no longer masked unless listed explicitly. Check the field
-  names your forms post and list every variant - `password` no longer covers
-  `newPassword`. The change stops unrelated fields such as `tokenCount` from
-  disappearing out of diagnostic emails.
+- **BREAKING:** `maskKeys` now matches complete field names and ignores case.
+  It no longer uses substring matching. For example, `token` does not match
+  `apiToken` or `tokenCount`. List every sensitive field name explicitly.
 - Stack frames whose template is not a file path, such as JDBC driver
   internals, are skipped after the first frame.
 - The exception's error code is hidden when it just repeats the database
   block's `sqlState`, which is what Adobe reports for database errors.
-- Timestamps now carry a timezone label, since an app that sets
-  `this.timezone` reports times in that zone rather than the reader's.
+- Timestamps now include a timezone label. An application may use a different
+  timezone from the person reading the email.
 - Throttle-window wording is correct under one minute: a 30-second window now
   reads "30-second" instead of "0 minutes".
 
 ### Added
 
-- A source code snippet around the failing line, highlighted, the way
-  ColdBox's Whoops page shows it. Controlled by `codeSnippetLines`.
+- A highlighted source snippet around the failing line. `codeSnippetLines`
+  controls its size.
 - A Database block for query failures: the failing SQL, datasource, driver
   error codes, and optionally the bound parameter values
   (`includeQueryParams`).
-- A "Caused by" list that walks the exception's cause chain, up to five
-  levels.
+- A "Caused by" list with up to five exception cause levels.
 - The exception's error code and `extendedInfo` (where cbValidation puts
   field-level errors).
-- A much fuller Request section. Every value the request did not provide shows
-  a placeholder (`emptyValueText`) instead of being silently absent. New rows:
+- A larger Request section. Missing request values show `emptyValueText`. New rows:
   `origin` (the file and line that broke, even for a plain `log.error()` call),
   `user` (via the new `userProvider` closure setting), `routePattern`,
   `routeName`, `routedModule`, `routedNamespace`, `view`, `layout`, `isAjax`,
@@ -235,13 +177,12 @@ published package.
   `memory` (JVM heap use), `sessionId` (opt-in via `includeScopes.session`),
   `templatePath`, `forwardedFor`, `forwardedProto`, `accept`,
   `acceptLanguage`, `https`, and `serverPort`.
-- Request headers in the Request section via the `includeHeaders` allowlist
-  (default `Content-Type`). `Cookie` and `Authorization` are never included.
+- Request headers selected by `includeHeaders`, which defaults to `Content-Type`.
+  `Cookie` and `Authorization` are always blocked.
 - An optional raw request body section (`includeRequestBody`, off by default)
   for JSON and API endpoints, masked with `maskKeys` and capped at
   `requestBodyMaxLength`.
-- The query string is masked with `maskKeys` (`maskQueryString`), closing the
-  gap where a secret in a GET URL reached the email unmasked.
+- `maskQueryString` applies `maskKeys` to GET query strings.
 - `relativePaths` trims the application root from file paths.
 - The digest email names the machine that flushed it.
 
@@ -249,10 +190,9 @@ published package.
 
 ### Removed
 
-- The `environments` setting. Alerts now run in every environment, including
-  `development`. To turn them off in one environment, add a function named after that
-  environment to `config/modules/errorAlerts.cfc` and set `settings.enabled = false`.
-  See "Disable alerts in development" in the README.
+- The `environments` setting. Alerts now run in every environment. To disable
+  one environment, add a matching function to `config/modules/errorAlerts.cfc`
+  and set `settings.enabled = false`. The README contains an example.
 
 ## [1.0.0] - 2026-07-24
 

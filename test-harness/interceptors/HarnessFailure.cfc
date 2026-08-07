@@ -1,15 +1,13 @@
 /**
  * HarnessFailure
  *
- * Throws from inside an interception point so alerts can be checked for errors
- * that happen before a handler action ever runs.
+ * Throws from ColdBox interception points before or after a handler action.
  *
- * It only fires when `rc.harnessFail` is present, so every other request in the
- * harness is unaffected.
+ * The interceptor only throws when rc.harnessFail selects one of its methods.
  *
- * The flag is removed before throwing. ColdBox runs the exceptionHandler event
- * after an unhandled exception, which fires these interception points again,
- * and leaving the flag set would loop forever.
+ * The selected method removes the flag before throwing. ColdBox runs the
+ * interception points again for the exceptionHandler event, so leaving the flag
+ * in place would create a loop.
  */
 component extends="coldbox.system.Interceptor" {
 

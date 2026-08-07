@@ -12,15 +12,13 @@ component singleton accessors="true" {
 	/**
 	 * compute
 	 *
-	 * Hashes the category, first 200 message characters, the top stack frame,
-	 * and the first application-owned stack frame. A hash collision would
-	 * group two errors in the same throttle window.
+	 * Hashes the category, the first 200 message characters, the top stack frame,
+	 * and the first application frame. A hash collision would put two errors in
+	 * the same throttle window.
 	 *
-	 * The application frame matters most for database errors: their top frame
-	 * is always the same framework grammar file, so without the application
-	 * frame two unrelated failing queries would only differ by message text.
-	 * The top frame stays in the hash so one call site that fails two
-	 * different ways still produces two signatures.
+	 * Database errors often share the same framework frame. The application frame
+	 * keeps errors from different call sites separate. The top frame also stays
+	 * in the hash so different failures at one call site remain separate.
 	 *
 	 * @logEvent The LogBox LogEvent to fingerprint.
 	 */

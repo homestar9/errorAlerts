@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines PayloadBuilder unit tests.
+	 */
 	function run(){
 		describe( "PayloadBuilder", function(){
 			beforeEach( function(){
@@ -66,9 +71,8 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "masks the Authorization header RestHandler puts in extraInfo", function(){
-				/* RestHandler passes getHTTPRequestData() as extraInfo, so every
-				 * request header lands in the email. That value never reaches
-				 * buildHeaders(), where Cookie and Authorization are blocked. */
+				/* RestHandler places request headers inside extraInfo. This path does
+				 * not pass through the header blocklist in buildHeaders(). */
 				var payload = builder.build(
 					newLogEvent( extraInfo = newRestHandlerExtraInfo( "Bearer leak-me-please" ) ),
 					"sig-1",
@@ -99,9 +103,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "does not truncate extraInfo values to rcValueMaxLength", function(){
-				/* sanitizeValue() clips to rcValueMaxLength, which would cut a
-				 * stack trace down to nothing. Only the caller's 2000-character
-				 * cap applies here. */
+				// extraInfo uses its section limit instead of the shorter rc value limit.
 				var info = { "_stacktrace" : repeatString( "y", 900 ) };
 
 				var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
@@ -320,12 +322,8 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "keeps the other keys when one value cannot be serialized", function(){
-				/* A value the engine's serializer refuses used to discard the
-				 * whole section, losing every other key the application
-				 * logged. A real example is a java.lang.Thread passed as
-				 * context, which overflows Lucee's serializer. The refusal is
-				 * simulated here so the spec runs fast and behaves the same on
-				 * every engine. */
+				/* Simulate a serializer failure so the test is fast and consistent on
+				 * every engine. Readable sibling values must remain in the output. */
 				makePublic( builder, "stringify" );
 				makePublic( builder, "toJson" );
 				builder.$( "toJson" ).$callback( function( value ){
@@ -373,8 +371,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "renders a null value as a placeholder instead of dropping the whole rc", function(){
-				/* A null rc value used to throw inside sanitizeScope's loop, and
-				 * buildRc's catch then discarded the entire rc table. */
+				// A null value must not make buildRc discard the complete rc table.
 				makePublic( builder, "sanitizeValue" );
 				expect( builder.sanitizeValue( "anything" ) ).toBe( "[null]" );
 			} );
@@ -693,9 +690,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "picks up a maskKeys change made after an earlier alert", function(){
-				/* The query string is the first thing an alert masks, before the
-				 * rc scope, so it used to be masked with whatever configuration a
-				 * previous alert had compiled. build() now recompiles first. */
+				// build() must refresh masking before it processes the query string.
 				makePublic( builder, "maskQueryString" );
 				builder.build( newLogEvent(), "sig-1", 1 );
 
@@ -744,10 +739,8 @@ component extends="tests.resources.BaseUnitSpec" {
 				makePublic( builder, "buildBody" );
 				makePublic( builder, "parseJson" );
 
-				/* The failure is forced rather than written as literal text.
-				 * Adobe ColdFusion rejects a trailing comma that Lucee and
-				 * BoxLang accept, so malformed text does not reach this path on
-				 * every engine - it is classified as non-JSON instead. */
+				/* Force the failure because engines classify malformed JSON differently.
+				 * Adobe rejects a trailing comma that Lucee and BoxLang accept. */
 				builder.$( "parseJson" ).$callback( function( content ){
 					throw( type = "ParserBoom", message = "this body cannot be parsed" );
 				} );
@@ -841,9 +834,8 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * newControllerStub
 	 *
-	 * Builds a controller stub with settings and a request collection. The event
-	 * stub answers every context method PayloadBuilder calls, so a missing stub
-	 * method cannot silently drop the whole routing block into its catch.
+	 * Builds a controller stub with settings and a request collection.
+	 * The event stub implements every context method used by PayloadBuilder.
 	 *
 	 * @rc The request collection the stubbed context returns.
 	 */

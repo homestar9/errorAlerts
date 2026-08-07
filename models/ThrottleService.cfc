@@ -1,16 +1,14 @@
 /**
  * ThrottleService
  *
- * Counts each error signature during a fixed window. The first
- * `maxPerWindow` occurrences are sent, and later occurrences are included in
- * one digest after the window expires.
+ * Counts each error signature during a fixed window. It sends the first
+ * `maxPerWindow` occurrences. It reports later occurrences in one digest.
  *
  * Counts are stored in memory for one JVM. A restart clears the counts and any
  * pending digest. Each server in a cluster keeps its own counts.
  *
- * BoxLang 1.x did not enforce CFML named locks across cfthread bodies in the
- * concurrency test. ReentrantLock provides the required shared lock on both
- * supported engines.
+ * BoxLang 1.x does not enforce CFML named locks across cfthread bodies in the
+ * concurrency test. A Java ReentrantLock works on every supported engine.
  */
 component singleton accessors="true" {
 
@@ -33,16 +31,15 @@ component singleton accessors="true" {
 	/**
 	 * record
 	 *
-	 * Records one occurrence and returns this result:
+	 * Records one occurrence and returns a throttle decision:
 	 *   {
 	 *     action        : "SEND" | "SUPPRESS",
 	 *     occurrence    : n,
 	 *     expiredDigest : {}
 	 *   }
 	 *
-	 * expiredDigest contains a digest when this call closes an expired window.
-	 * If the lock cannot be acquired, the method returns SEND so the alert is
-	 * not lost.
+	 * expiredDigest contains data when this call closes an expired window.
+	 * A lock failure returns SEND so the service does not lose the alert.
 	 *
 	 * @signature The error signature from SignatureService.
 	 * @snapshot  A compact struct describing this occurrence, kept for digests.
@@ -73,8 +70,7 @@ component singleton accessors="true" {
 					evictExpired( nowMs );
 				}
 				if ( variables.windows.count() >= settings.throttle.maxTrackedSignatures ) {
-					// Send without tracking when the registry is still full.
-					// This keeps memory bounded without dropping the alert.
+					// Keep memory bounded, but send the alert without tracking it.
 					variables.system.err.println(
 						"errorAlerts throttle is tracking #settings.throttle.maxTrackedSignatures# signatures; sending untracked."
 					);
@@ -88,9 +84,7 @@ component singleton accessors="true" {
 					firstSeen       : now(),
 					lastSeen        : now(),
 					lastEvent       : arguments.snapshot,
-					// Distinct routes and client addresses seen this window,
-					// capped at settings.digestSampleSize. The overflow flags
-					// say "there were more" once the cap is hit.
+					// Keep a limited set of routes and client addresses for the digest.
 					samples         : { route : [], client : [] },
 					overflow        : { route : false, client : false }
 				};
@@ -193,7 +187,7 @@ component singleton accessors="true" {
 	 *
 	 * Deletes expired windows without creating digests.
 	 * record() calls this while holding the lock when the registry is full.
-	 * Suppressed counts in these windows are lost to keep memory bounded.
+	 * This may discard suppressed counts, but it keeps memory use bounded.
 	 *
 	 * @nowMs The tick count already used by record().
 	 */
@@ -208,11 +202,10 @@ component singleton accessors="true" {
 	/**
 	 * addSamples
 	 *
-	 * Adds the snapshot's route and client to the window's distinct-value
-	 * sample sets. A value is skipped when blank or already sampled. Once a
-	 * set holds settings.digestSampleSize values, new distinct values only set
-	 * the overflow flag - the sets sit in a long-lived window entry and must
-	 * not grow with traffic. Runs while record() holds the lock.
+	 * Adds distinct route and client values to a window's samples.
+	 * Blank and duplicate values are skipped. New values set the overflow flag
+	 * after the sample reaches digestSampleSize. record() holds the lock while
+	 * this method runs.
 	 *
 	 * @entry    The window entry being updated.
 	 * @snapshot The occurrence snapshot from CaptureService.

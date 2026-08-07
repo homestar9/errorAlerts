@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines ThrottleService unit tests.
+	 */
 	function run(){
 		describe( "ThrottleService", function(){
 			beforeEach( function(){
@@ -162,10 +167,9 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "does not lose counts under concurrent recording", function(){
-				/* Read shared values from the spec variables scope. Adobe
-				 * ColdFusion deep-copies thread attributes, which would give each
-				 * thread a different service. Track completion in `done` because
-				 * BoxLang does not join a thread from inside this closure. */
+				/* Adobe deep-copies thread attributes, so shared values stay in the
+				 * spec scope. `done` tracks completion because BoxLang cannot join a
+				 * thread from this closure. */
 				done = {};
 				for ( var t = 1; t <= 4; t++ ) {
 					thread name="throttleSmoke#t##createUUID()#" {

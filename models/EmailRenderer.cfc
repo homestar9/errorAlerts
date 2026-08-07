@@ -2,10 +2,9 @@
  * EmailRenderer
  *
  * Renders payload structs as table-based HTML with inline styles.
- * PayloadBuilder applies maskKeys to request data and to extraInfo before it
- * reaches this component. Exception fields such as detail, extendedInfo, and
- * query parameter values are not masked, because they carry no field names to
- * match against.
+ * PayloadBuilder masks request data and extraInfo before rendering starts.
+ * Exception details and query parameter values have no field names, so
+ * maskKeys cannot mask them.
  * Sections are added in priority order until the character budget is used.
  */
 component singleton accessors="true" {
@@ -36,8 +35,7 @@ component singleton accessors="true" {
 		if ( !arguments.payload.request.isEmpty() ) {
 			middle.append( kvSection( "Request", arguments.payload.request ) );
 		}
-		// Engine, Java, ColdBox, and errorAlerts versions. Guarded by keyExists
-		// so a payload from an older module version still renders.
+		// keyExists() lets payloads from older module versions still render.
 		if ( arguments.payload.keyExists( "runtime" ) && !arguments.payload.runtime.isEmpty() ) {
 			middle.append( kvSection( "Runtime", arguments.payload.runtime ) );
 		}
@@ -78,13 +76,11 @@ component singleton accessors="true" {
 		counts[ "First seen" ]        = stamp( arguments.payload.firstSeen );
 		counts[ "Last seen" ]         = stamp( arguments.payload.lastSeen );
 		counts[ "Category" ]          = arguments.payload.category;
-		// Which server flushed this digest. Throttle counts are per JVM, so
-		// behind a load balancer each machine reports its own burst.
+		// Throttle counts are per JVM, so each server reports its own digest.
 		if ( arguments.payload.keyExists( "machine" ) && toString( arguments.payload.machine ).len() ) {
 			counts[ "Machine" ] = arguments.payload.machine;
 		}
-		// Distinct routes and client addresses seen during the window. "3 routes
-		// from 1 client IP" reads as a crawler; "1 route from 40 IPs" does not.
+		// Route and client counts help identify the shape of the error traffic.
 		var sampleRow = sampleSummary( arguments.payload, "route" );
 		if ( sampleRow.len() ) {
 			counts[ "Routes" ] = sampleRow;
@@ -109,12 +105,10 @@ component singleton accessors="true" {
 	/**
 	 * sampleSummary
 	 *
-	 * Formats one digest sample set as "3 distinct: a, b, c", or
-	 * "at least 5 distinct: a, b, c, d, e" when the cap was hit and more
-	 * values were seen. Plain words rather than "5+" because encodeForHtml()
-	 * turns "+" into an entity, which garbles text assertions and screen
-	 * readers. Returns an empty string when the payload has no samples for
-	 * the key, so older digest payloads render without the row.
+	 * Formats one route or client sample set for a digest.
+	 * The text says "at least" when more values exist than the sample can hold.
+	 * Words work better than "5+" after HTML encoding and with screen readers.
+	 * Older payloads with no samples return an empty string.
 	 *
 	 * @payload The digest payload.
 	 * @key     "route" or "client".
@@ -256,7 +250,7 @@ component singleton accessors="true" {
 	private string function exceptionSection( required struct exception ){
 		var body = "";
 
-		// Read through locals so an older payload without these keys still renders.
+		// Default missing fields so payloads from older versions still render.
 		var errorCode    = arguments.exception.keyExists( "errorCode" ) ? arguments.exception.errorCode : "";
 		var extendedInfo = arguments.exception.keyExists( "extendedInfo" ) ? arguments.exception.extendedInfo : "";
 		var db           = arguments.exception.keyExists( "database" ) ? arguments.exception.database : {};
@@ -265,9 +259,7 @@ component singleton accessors="true" {
 		var callerSnippet = arguments.exception.keyExists( "callerSnippet" ) ? arguments.exception.callerSnippet : { lines : [] };
 
 		if ( arguments.exception.type.len() ) {
-			// Adobe puts the SQLSTATE in errorCode for a database error, so the
-			// code would just repeat the sqlState row below. Show it only when
-			// it says something the Database block does not.
+			// Do not repeat a database SQLSTATE in both errorCode and sqlState.
 			var showCode = errorCode.len()
 			 && !( db.keyExists( "sqlState" ) && errorCode == db.sqlState );
 			var code = showCode
@@ -279,23 +271,21 @@ component singleton accessors="true" {
 			body &= preBlock( arguments.exception.detail.left( 1024 ) );
 		}
 
-		// The failing code itself. First because it is usually the whole answer.
-		// With two snippets, "Throw site" and "Application caller" tell the
-		// reader which is which; alone, the familiar "Source" label stays.
+		// Show the failing source first because it often explains the error.
+		// Use specific labels only when the email contains two source snippets.
 		if ( snippet.lines.len() ) {
 			var snippetLabel = callerSnippet.lines.len() ? "Throw site" : "Source";
 			body &= subTitle( "#snippetLabel# - #snippet.template#:#snippet.line#" );
 			body &= snippetBlock( snippet.lines );
 		}
 
-		// The application's own line that asked for the failing work.
+		// Show the application line that called the failing code.
 		if ( callerSnippet.lines.len() ) {
 			body &= subTitle( "Application caller - #callerSnippet.template#:#callerSnippet.line#" );
 			body &= snippetBlock( callerSnippet.lines );
 		}
 
-		// The failing SQL and the driver's own codes. Shown before the stack
-		// frames because on a query failure this is what identifies the problem.
+		// Show database details before stack frames because they identify query failures.
 		if ( db.count() ) {
 			body &= subTitle( "Database" );
 			if ( db.keyExists( "sql" ) ) {
@@ -317,8 +307,7 @@ component singleton accessors="true" {
 			body &= preBlock( extendedInfo.left( 1024 ) );
 		}
 
-		// A framework often catches a low-level error and throws its own, which
-		// leaves the real reason here rather than in the message above.
+		// A cause may contain the low-level error that the framework replaced.
 		if ( causes.len() ) {
 			body &= subTitle( "Caused by" );
 			for ( var cause in causes ) {
@@ -336,21 +325,18 @@ component singleton accessors="true" {
 
 			for ( var i = 1; i <= arguments.exception.tagContext.len(); i++ ) {
 				var frame = arguments.exception.tagContext[ i ];
-				// Older payloads have no index/application/fn keys; numbering
-				// then falls back to the row position, exactly as before.
+				// Older payloads use the row position because they have no index.
 				var index = frame.keyExists( "index" ) ? frame.index : i;
 				var isApp = frame.keyExists( "application" ) && frame.application;
 				var fn    = frame.keyExists( "fn" ) ? frame.fn : "";
 
-				// A jump in the raw position means frames were skipped, either
-				// driver noise or the gap before a pinned application frame.
+				// A jump in position means one or more frames were skipped.
 				if ( lastIndex && index > lastIndex + 1 ) {
 					var gap = index - lastIndex - 1;
 					frames.append( omittedRow( "... #gap# #gap == 1 ? "frame" : "frames"# omitted" ) );
 				}
 
-				// Application frames get a blue tint and bold text so the
-				// reader's eye lands on their own code first.
+				// Highlight application frames so developers can find their code.
 				var bg     = isApp ? "##dbeafe" : ( i % 2 == 0 ? "##f4f4f5" : "##ffffff" );
 				var color  = isApp ? "##1e40af" : "##3f3f46";
 				var weight = isApp ? "bold" : "normal";
@@ -364,8 +350,7 @@ component singleton accessors="true" {
 				lastIndex = index;
 			}
 
-			// Say when the list stops short. Without this row a ten-frame email
-			// looks like the whole stack, which misleads during diagnosis.
+			// Mark a shortened stack so it does not look complete.
 			if ( totalFrames > lastIndex ) {
 				var tail = totalFrames - lastIndex;
 				frames.append( omittedRow( "... #tail# more #tail == 1 ? "frame" : "frames"# not shown" ) );
@@ -411,9 +396,8 @@ component singleton accessors="true" {
 	/**
 	 * snippetBlock
 	 *
-	 * Renders numbered source lines with the failing one highlighted in red.
-	 * A table rather than a <pre> block, because Outlook collapses leading
-	 * whitespace in a pre and the indentation is half the point.
+	 * Renders numbered source lines and highlights the failing line.
+	 * A table preserves indentation in Outlook. A pre element does not.
 	 *
 	 * @lines Array of { number, text, isError } from PayloadBuilder.
 	 */
@@ -439,8 +423,7 @@ component singleton accessors="true" {
 	/**
 	 * omittedRow
 	 *
-	 * A gray italic row for the stack frame table marking frames that are not
-	 * shown, so the list never looks complete when it is not.
+	 * Renders a gray row that marks omitted stack frames.
 	 *
 	 * @text The already-plain text to show. Escaped here.
 	 */
@@ -506,9 +489,8 @@ component singleton accessors="true" {
 	/**
 	 * windowText
 	 *
-	 * Describes a throttle window in whole minutes, or in seconds when it is
-	 * under a minute. Dividing by 60 alone printed "0 minutes" for a short
-	 * window, which is what a test or a fast-cycling window looks like.
+	 * Describes a throttle window as an adjective.
+	 * Windows shorter than one minute use seconds instead of "0 minutes."
 	 *
 	 * @seconds The window length in seconds.
 	 */
@@ -524,8 +506,7 @@ component singleton accessors="true" {
 	/**
 	 * windowLabel
 	 *
-	 * The same window length worded as a noun, for sentences and table values
-	 * where "10-minute" on its own would not read correctly.
+	 * Describes a throttle window as a noun for sentences and table values.
 	 *
 	 * @seconds The window length in seconds.
 	 */
@@ -574,10 +555,9 @@ component singleton accessors="true" {
 	/**
 	 * zoneLabel
 	 *
-	 * Names the timezone the timestamps are written in. An application that sets
-	 * `this.timezone` reports times in that zone rather than the reader's, so a
-	 * bare "16:54:07" is ambiguous. Prefers the application's own setting and
-	 * falls back to the JVM default. Cached, since neither value changes.
+	 * Returns the timezone used for timestamps.
+	 * The application timezone takes priority over the JVM timezone. The result
+	 * is cached because neither setting changes while the application runs.
 	 */
 	private string function zoneLabel(){
 		if ( variables.keyExists( "cachedZone" ) ) {

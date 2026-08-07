@@ -3,9 +3,9 @@
  *
  * Run it with: box run-script build:package
  *
- * What it does, in order: run the test suite, copy the source into a staging folder minus
- * anything excluded, stamp the version, zip it, count the files to prove nothing went missing,
- * and write checksums. Everything it produces lands in .artifacts/<slug>/<version>/.
+ * Runs tests, copies the included source, stamps the version, creates the zip,
+ * checks its file count, and writes checksums. Output goes to
+ * .artifacts/<slug>/<version>/.
  *
  * Settings come from build/build.json. You should not need to edit this file.
  */
@@ -24,7 +24,7 @@ component {
 		variables.buildDir     = variables.root & "/" & variables.s.stagingDir;
 		variables.artifactsDir = variables.root & "/" & variables.s.artifactsDir;
 
-		// Start both folders empty so a build can never include leftovers from the last one.
+		// Remove old output so it cannot enter the new package.
 		[ variables.buildDir, variables.artifactsDir ].each( function( item ){
 			if ( directoryExists( item ) ) {
 				directoryDelete( item, true );
@@ -32,8 +32,7 @@ component {
 			directoryCreate( item, true, true );
 		} );
 
-		// Point a "coldbox" mapping at the installed framework, which some projects need in
-		// order to load their own code during a build. Skipped when the folder is not there.
+		// Map an installed ColdBox copy when project components need it during a build.
 		if ( len( trim( variables.s.coldboxMapping ) ) ) {
 			var coldboxPath = variables.root & "/" & variables.s.coldboxMapping;
 			if ( directoryExists( coldboxPath ) ) {
@@ -107,8 +106,7 @@ component {
 	/**
 	 * buildSource
 	 *
-	 * Copies the source into the staging folder, stamps the version, zips it, and checks the
-	 * zip holds everything.
+	 * Copies, stamps, packages, and verifies the source.
 	 *
 	 * @projectName The name used for the package folder and zip.
 	 * @version     The version being built.
@@ -146,8 +144,7 @@ component {
 			"Built from commit #arguments.buildID# on #dateTimeFormat( now(), "full" )#"
 		);
 
-		// Swap placeholder tokens for the real version and build identifier. A build from the
-		// release branch is stamped with the identifier; anything else is marked a snapshot.
+		// Release builds use the build ID. Other branches are marked as snapshots.
 		print.greenLine( "Stamping version #arguments.version#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
@@ -183,13 +180,12 @@ component {
 		fileCopy( "#variables.projectBuildDir#/box.json", variables.exportsDir );
 	}
 
-	/********************************************* PRIVATE HELPERS *********************************************/
+	/******************************** Private helpers ********************************/
 
 	/**
 	 * fillDefaults
 	 *
-	 * Fills in any argument left blank: the slug and version from box.json, the branch and
-	 * commit from git. Doing it here means every entry point behaves the same way.
+	 * Fills blank arguments from box.json and git.
 	 *
 	 * @args The argument struct, changed in place.
 	 */
@@ -211,9 +207,8 @@ component {
 	/**
 	 * getCurrentBranch
 	 *
-	 * Reads the current branch from .git/HEAD without needing the git program. Falls back to
-	 * the release branch from build.json when HEAD cannot be read, which happens when building
-	 * from a copy with no .git folder.
+	 * Reads the current branch from .git/HEAD without running git.
+	 * Uses the configured release branch when the repository data is unavailable.
 	 */
 	private string function getCurrentBranch(){
 		var headFile = variables.root & "/.git/HEAD";
@@ -231,9 +226,8 @@ component {
 	/**
 	 * getCurrentCommit
 	 *
-	 * Reads the short commit hash HEAD points at, straight from the .git folder so the git
-	 * program is not needed and it still works from an extracted copy. Returns "nocommit" when
-	 * there is nothing to read.
+	 * Reads the short commit hash from the .git folder.
+	 * Returns "nocommit" when repository data is unavailable.
 	 */
 	private string function getCurrentCommit(){
 		var headFile = variables.root & "/.git/HEAD";
@@ -274,11 +268,8 @@ component {
 	/**
 	 * ensureTestRunnerReachable
 	 *
-	 * Stops the build with a clear message when the test server is not answering. Kept separate
-	 * from runTests() so "the server is not running" never reads as "your tests failed".
-	 *
-	 * It asks for the site root rather than the test runner, because asking for the runner
-	 * would start the whole suite.
+	 * Stops the build when the test server does not answer.
+	 * The check uses the site root because requesting the runner starts the suite.
 	 */
 	private function ensureTestRunnerReachable(){
 		var probeUrl   = variables.config.probeUrl();
@@ -334,12 +325,8 @@ component {
 	/**
 	 * verifyZip
 	 *
-	 * Stops the build when the zip holds fewer files than the staging folder.
-	 *
-	 * This is deliberately simple: it counts files rather than working out what went wrong.
-	 * Counting catches any cause, including the one that started it. A published module once
-	 * shipped without several folders because an ignore rule quietly matched them, and nothing
-	 * failed until every app that installed it broke on startup.
+	 * Stops the build when the zip contains fewer files than the staging folder.
+	 * This catches any packaging rule that silently drops files.
 	 *
 	 * @zipPath The full path of the zip just written.
 	 */
@@ -374,19 +361,17 @@ component {
 	/**
 	 * copy
 	 *
-	 * Copies the project into the staging folder, leaving out anything the excludes match.
-	 * Written by hand because directoryCopy with a filter is unreliable on Lucee.
+	 * Copies included project files into the staging folder.
+	 * A custom copy is used because Lucee does not apply directoryCopy filters reliably.
 	 *
-	 * Only top-level names are tested. A folder that survives is copied whole, so a file
-	 * inside it cannot be excluded from here.
+	 * Only top-level names are tested. Included folders are copied in full.
 	 *
 	 * @src    The folder to copy from.
 	 * @target The folder to copy into.
 	 */
 	private function copy( required string src, required string target ){
 		var excludes = variables.config.allExcludes();
-		// Hold this in a plain variable: inside the closures below, "arguments" means the
-		// closure's own arguments, so arguments.target would be missing.
+		// A local variable keeps the target available inside the closures below.
 		var targetDir = arguments.target;
 
 		directoryList(
@@ -418,12 +403,8 @@ component {
 	/**
 	 * relativeName
 	 *
-	 * Turns a full path into its name relative to the project root, for example
-	 * "models" or "box.json".
-	 *
-	 * Both sides are put into the same shape first. directoryList returns paths using the
-	 * system separator, so comparing them against a path built with a different separator
-	 * quietly matches nothing and leaves the full path in place.
+	 * Returns a path relative to the project root.
+	 * Both paths use the same separators before comparison.
 	 *
 	 * @path The full path to shorten.
 	 */

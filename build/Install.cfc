@@ -4,12 +4,11 @@
  * Run it once, from your project root:
  *   box task run taskFile=build/Install.cfc
  *
- * It writes build/build.json, adds the release scripts to box.json, creates a changelog if you
- * do not have one, and copies RELEASE.md into your project. It never overwrites something you
- * already have unless you pass :force=true, so running it twice is safe.
+ * Writes build/build.json, adds release scripts to box.json, creates a changelog,
+ * and copies RELEASE.md. Existing files stay unchanged unless force is true.
  *
- * It works out sensible settings by looking at your project: the test runner comes from
- * box.json's testbox entry, and the engine list comes from the server json files in your root.
+ * Reads the TestBox runner from box.json and detects engines from server JSON
+ * files in the project root.
  */
 component {
 
@@ -51,7 +50,7 @@ component {
 			.toConsole();
 	}
 
-	/********************************************* STEPS *********************************************/
+	/******************************** Steps ********************************/
 
 	/**
 	 * writeBuildJSON
@@ -97,8 +96,8 @@ component {
 	/**
 	 * isInstallerSeed
 	 *
-	 * Reports whether build.json is the starter file shipped with this kit. Only a marked
-	 * starter can be replaced without force; malformed and user-owned files remain untouched.
+	 * Returns true when build.json is the starter file shipped with this kit.
+	 * Only that marked starter can be replaced without force.
 	 *
 	 * @path The build.json file to inspect.
 	 */
@@ -116,8 +115,7 @@ component {
 	/**
 	 * patchBoxJSON
 	 *
-	 * Adds the release scripts to box.json. Existing entries are left exactly as they are, so
-	 * this cannot break scripts you already rely on.
+	 * Adds missing release scripts to box.json without changing existing scripts.
 	 */
 	private function patchBoxJSON(){
 		var path = variables.root & "/box.json";
@@ -214,7 +212,7 @@ component {
 		print.greenLine( "  made  RELEASE.md" ).toConsole();
 	}
 
-	/********************************************* DETECTION *********************************************/
+	/******************************** Detection ********************************/
 
 	/**
 	 * detectProjectType
@@ -234,13 +232,12 @@ component {
 	/**
 	 * defaultExcludes
 	 *
-	 * Returns the complete starter exclusion list for a new project. The list is written into
-	 * build.json so an installed project keeps the packaging policy it reviewed, even when a
-	 * future version of this kit changes its own defaults.
+	 * Returns the starter package exclusions for a new project.
+	 * The list is stored in build.json so future kit changes do not silently
+	 * change the project's package.
 	 *
-	 * Module packages omit their development toolchain and every hidden item. Applications
-	 * keep files that may be part of a deployment, including modules, resources, package
-	 * manifests, .htaccess, and .well-known.
+	 * Modules omit development tools and hidden files. Applications keep files
+	 * that may be required at runtime.
 	 *
 	 * @projectType Either module or app.
 	 */
@@ -283,8 +280,7 @@ component {
 			];
 		}
 
-		// Applications may need these two hidden paths at runtime. Everything else hidden is
-		// treated as local tooling or potentially sensitive configuration.
+		// Applications may need these hidden paths at runtime.
 		common.append( "^\.(?!(?:htaccess|well-known)$).*" );
 		return common;
 	}
@@ -292,9 +288,8 @@ component {
 	/**
 	 * detectBranch
 	 *
-	 * Uses Gitflow's configured production branch when present. Otherwise reads the current
-	 * symbolic branch through git, which also works in linked worktrees, and falls back to main
-	 * for a detached checkout or a folder without usable git metadata.
+	 * Returns the Git Flow production branch or the current git branch.
+	 * Falls back to main when git metadata is unavailable.
 	 */
 	private string function detectBranch(){
 		try {
@@ -317,14 +312,11 @@ component {
 	/**
 	 * detectChangelogName
 	 *
-	 * Returns the name of the changelog the project already has, spelled exactly as it is on
-	 * disk. Falls back to CHANGELOG.md, which is the usual spelling.
+	 * Returns the existing changelog name with the same letter case used on disk.
+	 * Falls back to CHANGELOG.md.
 	 *
-	 * It reads the real directory listing rather than testing names one at a time. On Windows
-	 * and macOS, fileExists( "changelog.md" ) is true even when the file is really called
-	 * CHANGELOG.md, so testing names would happily report a spelling that does not exist. That
-	 * name then goes into build.json and works locally while failing on Linux, where the case
-	 * has to match.
+	 * A directory listing is required because Windows and macOS may ignore case
+	 * in fileExists(). The exact case must still work on Linux.
 	 */
 	private string function detectChangelogName(){
 		for ( var name in directoryList( variables.root, false, "name", "*.md" ) ) {
@@ -338,8 +330,7 @@ component {
 	/**
 	 * detectTestRunner
 	 *
-	 * Takes the test runner URL from box.json's testbox entry, which most projects already
-	 * have. Falls back to a placeholder to be corrected by hand.
+	 * Returns the TestBox runner URL from box.json or a placeholder.
 	 *
 	 * @box The parsed box.json.
 	 */
@@ -361,8 +352,7 @@ component {
 	/**
 	 * detectEngines
 	 *
-	 * Finds the server json files in the project root and turns them into engine entries, with
-	 * a readable name worked out from each file name.
+	 * Converts server JSON files in the project root into engine entries.
 	 */
 	private array function detectEngines(){
 		var engines = [];
@@ -381,9 +371,8 @@ component {
 	/**
 	 * engineName
 	 *
-	 * Prefers app.cfengine from the server file, then its name, then a readable version of the
-	 * filename. A malformed file is still included so installation never silently loses a
-	 * server the user expected to test.
+	 * Returns an engine name from app.cfengine, the server name, or the filename.
+	 * A malformed file stays in the list so later validation reports it.
 	 *
 	 * @file The server json file name.
 	 */
@@ -440,13 +429,13 @@ component {
 		return arrayToList( words, " " );
 	}
 
-	/********************************************* HELPERS *********************************************/
+	/******************************** Helpers ********************************/
 
 	/**
 	 * formatJSON
 	 *
-	 * Turns a struct into readable JSON. CommandBox's own formatter is used when available so
-	 * the result matches how it writes box.json.
+	 * Converts a struct to readable JSON.
+	 * Uses the CommandBox formatter when it is available.
 	 *
 	 * @data The struct to write.
 	 */
@@ -466,9 +455,7 @@ component {
 	 */
 	private string function defaultChangelog(){
 		var lf = chr( 10 );
-		// Build the markdown headings from chr( 35 ) rather than writing hashes in the string.
-		// A # starts a variable in CFML, so hashes have to be doubled, and counting them for a
-		// three-hash heading is a good way to write a bug.
+		// chr( 35 ) avoids CFML interpolation rules for # in Markdown headings.
 		var h1 = repeatString( chr( 35 ), 1 ) & " ";
 		var h2 = repeatString( chr( 35 ), 2 ) & " ";
 		var h3 = repeatString( chr( 35 ), 3 ) & " ";

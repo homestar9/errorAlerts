@@ -1,12 +1,10 @@
 /**
  * ErrorAlertAppender
  *
- * Receives root logger events that match the registered severity range and
- * passes them to CaptureService.
+ * Passes matching root logger events to CaptureService.
  *
- * LogBox creates appenders directly instead of using WireBox, so injected
- * properties are unavailable. This component resolves CaptureService through
- * the injector provided by LogBox.
+ * LogBox creates appenders without WireBox property injection. This component
+ * uses the injector that LogBox provides to load CaptureService.
  */
 component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 
@@ -36,11 +34,9 @@ component extends="coldbox.system.logging.AbstractAppender" accessors="true" {
 	 * logMessage
 	 *
 	 * Sends one log event to CaptureService.
-	 * The request flag must be checked before capture. Moving it later would
-	 * allow an error during capture to enter this appender again.
-	 * Events from this module are skipped so its own errors do not create alerts.
-	 * Internal failures go to System.err because LogBox would call this appender
-	 * again for another matching error.
+	 * The request flag prevents an error during capture from calling this method
+	 * again. Events from this module are skipped for the same reason. Internal
+	 * failures go to System.err instead of LogBox.
 	 *
 	 * @logEvent The LogBox LogEvent being logged.
 	 */

@@ -3,6 +3,11 @@
  */
 component extends="tests.resources.BaseUnitSpec" {
 
+	/**
+	 * run
+	 *
+	 * Defines EmailRenderer unit tests.
+	 */
 	function run(){
 		describe( "EmailRenderer", function(){
 			beforeEach( function(){
@@ -37,8 +42,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "renders an older payload missing the newer exception keys", function(){
-				// A payload built by version 2.0 has none of the newer keys. The
-				// renderer must not throw over their absence.
+				// Version 2.0 payloads do not have the newer optional keys.
 				var payload       = newErrorPayload();
 				payload.exception = {
 					type       : "HarnessBoom",

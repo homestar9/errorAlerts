@@ -7,6 +7,10 @@ component {
 	 * index
 	 *
 	 * Renders the scenario catalog.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function index( event, rc, prc ){
 		prc.mailer       = getSetting( "moduleSettings" ).cbmailservices.defaultProtocol;
@@ -20,6 +24,10 @@ component {
 	 * boom
 	 *
 	 * Throws an exception for a manual alert test.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function boom( event, rc, prc ){
 		throw( type = "HarnessBoom", message = "errorAlerts harness test explosion" );
@@ -29,6 +37,10 @@ component {
 	 * onException
 	 *
 	 * Sets the response status for the harness's custom exception handler.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function onException( event, rc, prc ){
 		event.setHTTPHeader( statusCode = 500 );
@@ -38,6 +50,10 @@ component {
 	 * diag
 	 *
 	 * Checks module services and sends an error to the in-memory mailbox.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function diag( event, rc, prc ){
 		var out = [];
@@ -77,6 +93,10 @@ component {
 	 * lastMail
 	 *
 	 * Renders the HTML body of the newest in-memory email.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
 	 */
 	function lastMail( event, rc, prc ){
 		var mailbox = getInstance( "MailService@cbmailservices" ).getMailer( "default" ).transit.getMail();
