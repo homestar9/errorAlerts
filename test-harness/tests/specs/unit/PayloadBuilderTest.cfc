@@ -692,6 +692,26 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( builder.maskQueryString( "pass%77ord=abc" ) ).toBe( "pass%77ord=*** masked ***" );
 			} );
 
+			it( "picks up a maskKeys change made after an earlier alert", function(){
+				/* The query string is the first thing an alert masks, before the
+				 * rc scope, so it used to be masked with whatever configuration a
+				 * previous alert had compiled. build() now recompiles first. */
+				makePublic( builder, "maskQueryString" );
+				builder.build( newLogEvent(), "sig-1", 1 );
+
+				settings.maskKeys = [ "sessionKey" ];
+				builder.build( newLogEvent(), "sig-2", 1 );
+
+				expect( builder.maskQueryString( "sessionKey=abc" ) ).toBe(
+					"sessionKey=*** masked ***",
+					"the newly listed name must be masked"
+				);
+				expect( builder.maskQueryString( "token=abc" ) ).toBe(
+					"token=abc",
+					"a name dropped from the list must no longer be masked"
+				);
+			} );
+
 			it( "includes allowlisted headers and refuses credential headers", function(){
 				makePublic( builder, "buildHeaders" );
 				settings.includeHeaders = [ "Content-Type", "Authorization", "Cookie", "X-Request-Id" ];
@@ -718,6 +738,55 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( body ).toInclude( "7" );
 				expect( body ).notToInclude( "shh", "a JSON field named in maskKeys must be masked" );
 				expect( body ).toInclude( "masked" );
+			} );
+
+			it( "never prints a JSON body whose parse fails", function(){
+				makePublic( builder, "buildBody" );
+				makePublic( builder, "parseJson" );
+
+				/* The failure is forced rather than written as literal text.
+				 * Adobe ColdFusion rejects a trailing comma that Lucee and
+				 * BoxLang accept, so malformed text does not reach this path on
+				 * every engine - it is classified as non-JSON instead. */
+				builder.$( "parseJson" ).$callback( function( content ){
+					throw( type = "ParserBoom", message = "this body cannot be parsed" );
+				} );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { password : "shh" } )
+				} );
+
+				expect( body ).notToInclude( "shh", "unwalkable JSON must never be printed raw" );
+				expect( body ).toInclude( "could not be parsed" );
+			} );
+
+			it( "never prints a JSON body that parses to a bare value", function(){
+				makePublic( builder, "buildBody" );
+				makePublic( builder, "parseJson" );
+				// A bare string or number carries no field names to mask-check.
+				builder.$( "parseJson", "shh" );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { password : "shh" } )
+				} );
+
+				expect( body ).notToInclude( "shh" );
+				expect( body ).toInclude( "could not be parsed" );
+			} );
+
+			it( "reports an oversized JSON body by size instead of parsing it", function(){
+				makePublic( builder, "buildBody" );
+				builder.$property( propertyName = "MAX_PARSE_CHARS", propertyScope = "variables", mock = 50 );
+
+				var body = builder.buildBody( {
+					headers : { "Content-Type" : "application/json" },
+					content : serializeJSON( { apiKey : repeatString( "x", 200 ) } )
+				} );
+
+				expect( body ).toInclude( "too large to mask" );
+				expect( body ).notToInclude( "xxx", "an unparsed body must not be printed" );
 			} );
 
 			it( "skips form bodies and reports binary bodies by size", function(){

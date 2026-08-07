@@ -47,6 +47,15 @@ component singleton accessors="true" {
 		 * limit. Real payloads repeat key names, so the cache stays tiny. */
 		variables.VERDICT_CACHE_MAX = 1000;
 
+		/* Largest JSON request body this will parse, in characters. Parsing is
+		 * what makes masking possible, but deserializeJSON() has to build the
+		 * whole object graph before the budget-bounded walk can start, and that
+		 * graph costs several times the text it came from. Two megabytes is far
+		 * above any real API payload and far below the size that would matter to
+		 * a server already handling an error. A larger body is reported by size
+		 * instead of parsed. */
+		variables.MAX_PARSE_CHARS = 2097152;
+
 		// The directory holding this file, e.g. ".../errorAlerts/models/".
 		var modelsPath           = getDirectoryFromPath( getCurrentTemplatePath() ).replace( "\", "/", "all" );
 		variables.ownModelsPath  = modelsPath;
@@ -69,6 +78,11 @@ component singleton accessors="true" {
 		required string signature,
 		required numeric occurrence
 	){
+		/* Compile the masking configuration once for the whole alert. Every
+		 * sanitize path below reads the compiled result instead of rebuilding a
+		 * fingerprint per rc key, per header, and per request body. */
+		ensureMaskConfig();
+
 		var exception = buildException( arguments.logEvent.getExtraInfo() );
 
 		var payload = {
@@ -1018,8 +1032,19 @@ component singleton accessors="true" {
 	 * Form posts are skipped: their fields are already in the rc table, masked,
 	 * and repeating them raw here would print the same secrets unmasked. A JSON
 	 * body, object or array, gets its fields masked at any depth through
-	 * sanitizeNode for the same reason. Anything else is truncated plain text,
-	 * and binary content shows only its size.
+	 * sanitizeNode for the same reason. Binary content shows only its size.
+	 *
+	 * A body isJSON() accepts is never printed raw. If it cannot be walked - too
+	 * large to parse safely, a parse failure, or a bare string or number
+	 * carrying no field names - it is reported by size. Printing it would emit
+	 * content that skipped the mask check, which the sanitizer never does
+	 * anywhere else.
+	 *
+	 * Anything else is truncated plain text. Key masking has nothing to match in
+	 * XML or free text, and that limit is documented rather than hidden, because
+	 * reading the body is the whole point of the setting. Note that malformed
+	 * JSON lands here on a strict engine: Adobe ColdFusion's isJSON() rejects a
+	 * trailing comma that Lucee and BoxLang accept.
 	 *
 	 * @httpData The struct from getHTTPRequestData( true ): headers plus content.
 	 */
@@ -1058,10 +1083,15 @@ component singleton accessors="true" {
 			}
 
 			if ( isJSON( content ) ) {
+				// Refuse to parse a body large enough to be a problem by itself.
+				if ( content.len() > variables.MAX_PARSE_CHARS ) {
+					return "[body too large to mask, #content.len()# chars]";
+				}
+
 				try {
-					var parsed = deserializeJSON( content );
+					var parsed = parseJson( content );
 					if ( isStruct( parsed ) || isArray( parsed ) ) {
-						ensureMaskConfig();
+						ensureCompiled();
 						var cleanBody = sanitizeNode(
 							"",
 							parsed,
@@ -1072,8 +1102,18 @@ component singleton accessors="true" {
 					}
 				} catch ( any e ) {
 				}
+
+				/* Reached when the body announced itself as JSON but could not be
+				 * walked: deserializeJSON() threw, or it returned a bare string or
+				 * number with no field names in it. Printing the raw text here
+				 * would emit content that never passed the mask check, so report
+				 * it by size instead. */
+				return "[body could not be parsed for masking, #content.len()# chars]";
 			}
 
+			/* Not JSON at all: XML, plain text, anything else. There are no field
+			 * names for maskKeys to match, so this is shown as sent. The README
+			 * lists it under "What key masking can never reach". */
 			return truncate( content, settings.requestBodyMaxLength );
 		} catch ( any e ) {
 			return "";
@@ -1216,6 +1256,8 @@ component singleton accessors="true" {
 			return "";
 		}
 
+		ensureCompiled();
+
 		var pairs = arguments.queryString.listToArray( "&" );
 		var clean = [];
 
@@ -1263,9 +1305,7 @@ component singleton accessors="true" {
 		if ( !arguments.key.len() ) {
 			return false;
 		}
-		if ( !structKeyExists( variables, "maskCompiled" ) ) {
-			ensureMaskConfig();
-		}
+		ensureCompiled();
 
 		var compiled = variables.maskCompiled;
 		if ( structKeyExists( compiled.exactLookup, arguments.key ) ) {
@@ -1341,7 +1381,7 @@ component singleton accessors="true" {
 	 * @value The value to sanitize, any type, may be null.
 	 */
 	private string function sanitizeValue( required string key, any value ){
-		ensureMaskConfig();
+		ensureCompiled();
 
 		if ( isNull( arguments.value ) ) {
 			return "[null]";
@@ -1401,7 +1441,7 @@ component singleton accessors="true" {
 	 * @value The value to sanitize, any type.
 	 */
 	private any function sanitizeDeep( required any value ){
-		ensureMaskConfig();
+		ensureCompiled();
 		return sanitizeNode(
 			"",
 			arguments.value,
@@ -1575,15 +1615,38 @@ component singleton accessors="true" {
 	}
 
 	/**
+	 * ensureCompiled
+	 *
+	 * Compiles the masking configuration when nothing has been compiled yet.
+	 *
+	 * This is the cheap guard every sanitize path uses: one struct-key check.
+	 * build() calls ensureMaskConfig() once per alert to notice a settings
+	 * change, so rechecking the fingerprint per rc key, per header and per
+	 * query-string field would only repeat work already done. The guard still
+	 * has to exist because the specs and the benchmark suite call buildBody(),
+	 * sanitizeValue() and maskQueryString() directly, without going through
+	 * build().
+	 */
+	private void function ensureCompiled(){
+		if ( !structKeyExists( variables, "maskCompiled" ) ) {
+			ensureMaskConfig();
+		}
+	}
+
+	/**
 	 * ensureMaskConfig
 	 *
 	 * Compiles the masking configuration into variables.maskCompiled when it
 	 * has not been built yet or when the settings changed since the last
-	 * compile. Called once per sanitize entry point, never per node. Unit
-	 * specs swap and mutate the settings struct between tests, which is why
-	 * the fingerprint recheck exists; in production the settings never change,
-	 * so this is three short string joins per alert. A concurrent
-	 * double-compile assigns the same result twice, which is harmless.
+	 * compile.
+	 *
+	 * Called once per alert, from build(). Unit specs swap and mutate the
+	 * settings struct between tests, which is why the fingerprint recheck
+	 * exists; in production the settings never change, so an alert pays for
+	 * three short string joins and nothing else. Everything downstream uses
+	 * ensureCompiled() instead, so a wide rc no longer rebuilds the fingerprint
+	 * once per key. A concurrent double-compile assigns the same result twice,
+	 * which is harmless.
 	 */
 	private void function ensureMaskConfig(){
 		var fingerprint = settingOr( "maskKeys", [] ).toList( "|" )
@@ -1771,6 +1834,25 @@ component singleton accessors="true" {
 	 */
 	private string function toJson( required any value ){
 		return serializeJSON( arguments.value );
+	}
+
+	/**
+	 * parseJson
+	 *
+	 * Deserializes a request body. This is its own method for the same reason
+	 * toJson() is: so tests can force a parse failure, or a parse that returns a
+	 * bare value, without depending on a particular engine.
+	 *
+	 * There is no one piece of text that reaches those paths everywhere.
+	 * Engines disagree about what isJSON() accepts - Adobe ColdFusion 2023
+	 * rejects a trailing comma that Lucee 5 and BoxLang both accept - so text
+	 * chosen to fail the parse on one engine is simply classified as non-JSON on
+	 * another and takes a different path entirely.
+	 *
+	 * @content The request body text.
+	 */
+	private any function parseJson( required string content ){
+		return deserializeJSON( arguments.content );
 	}
 
 	/**
