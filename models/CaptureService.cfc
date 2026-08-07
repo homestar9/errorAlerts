@@ -174,9 +174,11 @@ component singleton accessors="true" {
 			return false;
 		}
 
-		// findNoCase() == 1 rather than left( 14 ): on Adobe ColdFusion left()
-		// throws when the string is shorter than the requested length, and a log
-		// message can be shorter than the prefix.
+		/* findNoCase() == 1 rather than left( 14 ) because it reads as "starts
+		 * with" and does not repeat a length that would have to change with the
+		 * text. This is a readability choice, not an engine workaround: Adobe
+		 * ColdFusion 2023 and 2025, Lucee 5, and BoxLang all return the whole
+		 * string when left() is asked for more characters than it holds. */
 		return arguments.logEvent.getMessage().findNoCase( "Error calling " ) == 1;
 	}
 

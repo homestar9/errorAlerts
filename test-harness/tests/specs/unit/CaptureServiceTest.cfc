@@ -132,7 +132,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				it( "handles a message shorter than the matched prefix", function(){
 					expect( function(){
 						capture.capture( newLogEvent( message = "Boom", extraInfo = newRestHandlerExtraInfo() ) );
-					} ).notToThrow( message = "left() would throw on Adobe ColdFusion; findNoCase() does not" );
+					} ).notToThrow( message = "a message shorter than the prefix must not break the check" );
 					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
 				} );
 
