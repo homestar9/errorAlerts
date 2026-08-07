@@ -76,6 +76,13 @@ component {
 				subjectPrefix : "[Harness]",
 				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send",
+				/* Deliberately partial. ColdBox merges module settings one level
+				 * deep, so this drops rc, cgi and extraInfo unless the module puts
+				 * them back in onLoad(). `session : false` is the shipped value,
+				 * so the harness behaves exactly as it would with no override at
+				 * all - but if that repair ever regresses, every spec that reads
+				 * an rc table fails instead of the bug reaching a release. */
+				includeScopes : { session : false },
 				/* The module ships with an empty maskKeys: masking is opt-in.
 				 * The harness opts in so the masking demo routes and the
 				 * integration specs have field names to hide. */

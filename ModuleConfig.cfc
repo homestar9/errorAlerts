@@ -30,6 +30,8 @@ component {
 	 * Applications can override them in config/modules/errorAlerts.cfc.
 	 */
 	function configure(){
+		var nested = nestedDefaults();
+
 		variables.settings = {
 			// Set false to load the module without registering its services.
 			enabled              : true,
@@ -47,16 +49,16 @@ component {
 			levelMin             : "FATAL",
 			levelMax             : "ERROR",
 			// Limit immediate alerts for each signature during a fixed window.
-			throttle             : {
-				maxPerWindow         : 3,
-				windowSeconds        : 600,
-				maxTrackedSignatures : 500
-			},
+			// Defined in nestedDefaults() so a partial override can be repaired.
+			throttle             : nested.throttle,
 			// Check expired throttle windows at this interval.
 			digestFlushSeconds   : 60,
 			/* How many distinct routes and client IPs a digest email lists from
 			 * the occurrences seen during one throttle window. Values past the
-			 * cap are counted but not listed. 0 turns sampling off. */
+			 * cap are counted but not listed. The client addresses print exactly
+			 * as received and maskKeys cannot filter them, so a digest email
+			 * carries visitor IP addresses. 0 turns sampling off, which also
+			 * stops the route list. */
 			digestSampleSize     : 5,
 			// Ignore category prefixes that would create duplicate or recursive
 			// alerts. Removing cbmailservices can alert on a failed alert email.
@@ -97,8 +99,9 @@ component {
 			],
 			/* session adds the session id so repeat alerts from one visitor can be
 			 * tied together. Off by default: a live session id in an email is
-			 * enough to impersonate that visitor. */
-			includeScopes        : { rc : true, cgi : true, extraInfo : true, session : false },
+			 * enough to impersonate that visitor. Defined in nestedDefaults() so
+			 * a partial override can be repaired. */
+			includeScopes        : nested.includeScopes,
 			/* Lines of source either side of the failing line, shown in the email
 			 * the way ColdBox's Whoops page shows them. 0 turns it off. Costs one
 			 * file read per alert and puts application source in the email. */
@@ -136,9 +139,12 @@ component {
 			includeHeaders       : [ "Content-Type" ],
 			/* Include the raw request body in the email. Off by default. A JSON or
 			 * API request puts its payload in the body, not in rc, so a failing
-			 * API call is otherwise invisible. JSON bodies get their top-level
-			 * fields masked with maskKeys. Form posts are skipped because the rc
-			 * table already shows those fields, masked. */
+			 * API call is otherwise invisible. JSON bodies, objects and arrays
+			 * alike, get their fields masked at any depth; one that cannot be
+			 * parsed is reported by size rather than printed. Form posts are
+			 * skipped because the rc table already shows those fields, masked. A
+			 * body that is not JSON carries no field names for maskKeys to match,
+			 * so it is shown as sent. */
 			includeRequestBody   : false,
 			// Cap the request body at this many characters.
 			requestBodyMaxLength : 4000,
@@ -184,6 +190,11 @@ component {
 	function onLoad(){
 		var moduleSettings = controller.getSetting( "moduleSettings" ).errorAlerts;
 
+		/* Repair a partial nested override before any service reads it. This runs
+		 * even when the module is inactive, because the scheduler still resolves
+		 * CaptureService and would hit the same missing keys. */
+		applyNestedDefaults( moduleSettings );
+
 		if ( !isActive( moduleSettings ) ) {
 			return;
 		}
@@ -219,6 +230,73 @@ component {
 		try {
 			controller.getInterceptorService().unregister( "UnhandledExceptionCapture@errorAlerts" );
 		} catch ( any e ) {
+		}
+	}
+
+	/**
+	 * nestedDefaults
+	 *
+	 * Returns the two settings that are structs rather than simple values.
+	 *
+	 * These live in their own method because configure() and onLoad() both need
+	 * them and must not drift apart: configure() uses them to build the shipped
+	 * settings, and onLoad() uses them to put back whatever a partial override
+	 * dropped. Every call returns a fresh struct, so a caller can store the
+	 * result without sharing it.
+	 */
+	private struct function nestedDefaults(){
+		return {
+			throttle      : {
+				maxPerWindow         : 3,
+				windowSeconds        : 600,
+				maxTrackedSignatures : 500
+			},
+			includeScopes : {
+				rc        : true,
+				cgi       : true,
+				extraInfo : true,
+				session   : false
+			}
+		};
+	}
+
+	/**
+	 * applyNestedDefaults
+	 *
+	 * Puts back any key a partial override dropped from `throttle` or
+	 * `includeScopes`.
+	 *
+	 * ColdBox merges module settings one level deep. An application that writes
+	 * `includeScopes : { session : true }` replaces the whole struct, so `rc`,
+	 * `cgi` and `extraInfo` disappear. PayloadBuilder.build() then throws while
+	 * reading them, CaptureService swallows the failure, and the application
+	 * silently receives no alerts at all - one line on System.err is the only
+	 * sign. A partial `throttle` does the same thing and also makes
+	 * ThrottleService fail open, so throttling stops working too.
+	 *
+	 * Filling the gaps here repairs every service at once, because this is the
+	 * same struct instance WireBox injects. A key the application did set is
+	 * never touched.
+	 *
+	 * @settings The merged module settings struct, modified in place.
+	 */
+	private void function applyNestedDefaults( required struct settings ){
+		var defaults = nestedDefaults();
+
+		for ( var name in defaults ) {
+			/* A missing key, or one an application set to something that is not a
+			 * struct, is replaced outright: every read the services make would
+			 * fail against a simple value. */
+			if (
+				!structKeyExists( arguments.settings, name )
+				|| !isStruct( arguments.settings[ name ] )
+			) {
+				arguments.settings[ name ] = defaults[ name ];
+				continue;
+			}
+
+			// false means "add missing keys only", so an override always wins.
+			structAppend( arguments.settings[ name ], defaults[ name ], false );
 		}
 	}
 
