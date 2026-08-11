@@ -16,11 +16,40 @@ component extends="tests.resources.BaseUnitSpec" {
 				renderer.$property( propertyName = "settings", mock = settings );
 			} );
 
-			it( "emits only inline styles: no style blocks, classes, or scripts", function(){
+			it( "limits the style block to the small-screen media query", function(){
 				var html = renderer.renderError( newErrorPayload() );
-				expect( html ).notToInclude( "<style" );
-				expect( html ).notToInclude( "class=" );
 				expect( html.lcase() ).notToInclude( "<script" );
+				// The block opens with the media query, so it cannot hold a rule
+				// that changes the desktop layout.
+				expect( html ).toInclude( "<style>@media only screen and (max-width:600px)" );
+				expect( html ).toInclude( "width=device-width", "phones need the viewport tag to lay the email out" );
+			} );
+
+			it( "keeps inline styles on every element that carries a class", function(){
+				// The snippet is empty in the base fixture, so add one to reach
+				// the ea-code cell.
+				var payload               = newErrorPayload();
+				payload.exception.snippet = {
+					template : "/app/x.cfm",
+					line     : 5,
+					lines    : [ { number : 5, text : "fixture line 5", isError : true } ]
+				};
+
+				var html = renderer.renderError( payload );
+				// A client that drops the style block must still render the
+				// desktop layout from the inline styles alone.
+				for ( var className in [ "ea-hd", "ea-sec", "ea-ft", "ea-l", "ea-v", "ea-code", "ea-frame" ] ) {
+					expect( html ).toInclude(
+						"class=""#className#"" style=",
+						"#className# must be followed by its inline styles"
+					);
+				}
+			} );
+
+			it( "marks the label and value rows that stack on a small screen", function(){
+				var html = renderer.renderError( newErrorPayload() );
+				expect( html ).toInclude( "class=""ea-kv""", "the label and value table stacks on a phone" );
+				expect( html ).toInclude( "class=""ea-kvr""", "each label and value row stacks on a phone" );
 			} );
 
 			it( "HTML-encodes every dynamic value", function(){
@@ -208,7 +237,8 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( html ).toInclude( "97" );
 				expect( html ).toInclude( "Total occurrences" );
 				expect( html ).toInclude( "APOLLO", "the digest names the server that flushed it" );
-				expect( html ).notToInclude( "<style" );
+				expect( html ).toInclude( "<style>@media only screen and (max-width:600px)" );
+				expect( html ).toInclude( "class=""ea-kvr""", "the burst summary rows stack on a phone" );
 			} );
 
 			it( "lists the digest's distinct routes and clients with overflow wording", function(){

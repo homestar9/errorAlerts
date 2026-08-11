@@ -73,6 +73,8 @@ Visit the action in your browser. You should receive an email with the error det
 
 If an error starts deep inside framework or ORM code, the email also finds the first frame from your application. The email labels this frame and its source as "Application caller." A row such as "... 5 frames omitted" marks a shortened stack.
 
+The email adjusts to small screens. On a screen narrower than 600 pixels, each label moves above its value so the value gets the full width, section padding shrinks, and long source lines and file paths wrap instead of running off the side. Every element also carries its own inline styles, so a mail client that ignores embedded style blocks, such as Outlook on Windows, still shows the normal two-column layout. There is no setting to configure here.
+
 Remove the test action after confirming delivery.
 
 ## Using errorAlerts

@@ -1,7 +1,9 @@
 /**
  * EmailRenderer
  *
- * Renders payload structs as table-based HTML with inline styles.
+ * Renders payload structs as a full HTML document. Every element carries its
+ * own inline styles, so a mail client that strips the style block still gets
+ * the desktop layout. The style block holds one media query and nothing else.
  * PayloadBuilder masks request data and extraInfo before rendering starts.
  * Exception details and query parameter values have no field names, so
  * maskKeys cannot mask them.
@@ -18,6 +20,32 @@ component singleton accessors="true" {
 	variables.LABEL_CELL = "padding:4px 10px 4px 0;vertical-align:top;white-space:nowrap;color:##71717a;font-size:12px;#variables.FONT#";
 	variables.VALUE_CELL = "padding:4px 0;vertical-align:top;word-break:break-word;color:##18181b;font-size:12px;#variables.MONO#";
 	variables.TITLE      = "margin:0 0 6px 0;color:##3f3f46;font-size:13px;font-weight:bold;#variables.FONT#";
+
+	// Overrides for screens under 600px. The label and value stack, padding
+	// shrinks, and code lines wrap instead of making the email wider than the
+	// screen. Only class selectors are used, so nothing here needs ## escaping.
+	// Keep it compact: its length comes out of the email size budget.
+	variables.MOBILE_CSS = "@media only screen and (max-width:600px){"
+	 & ".ea-kv,.ea-kvr,.ea-l,.ea-v{display:block!important;width:100%!important}"
+	 & ".ea-l{white-space:normal!important;padding:6px 0 0 0!important}"
+	 & ".ea-v{padding:0 0 4px 0!important}"
+	 & ".ea-sec,.ea-hd{padding:12px!important}"
+	 & ".ea-ft{padding:10px 12px!important}"
+	 & ".ea-code{white-space:pre-wrap!important;word-break:break-word!important;overflow-wrap:anywhere!important}"
+	 & ".ea-frame{word-break:break-word!important;overflow-wrap:anywhere!important}"
+	 & "}";
+
+	// The document around the card rows. The viewport meta tag stops phones
+	// from laying the email out at desktop width and then shrinking it.
+	variables.DOC_HEAD = "<!doctype html><html><head><meta charset=""utf-8""/>"
+	 & "<meta name=""viewport"" content=""width=device-width,initial-scale=1""/>"
+	 & "<style>#variables.MOBILE_CSS#</style></head>"
+	 & "<body style=""margin:0;padding:0;"">"
+	 & "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"" style=""background:##f4f4f5;padding:16px 0;#variables.FONT#"">"
+	 & "<tr><td align=""center"" style=""padding:8px;"">"
+	 & "<table role=""presentation"" width=""640"" cellpadding=""0"" cellspacing=""0"" style=""max-width:640px;width:100%;background:##ffffff;border:1px solid ##e4e4e7;"">";
+
+	variables.DOC_FOOT = "</table></td></tr></table></body></html>";
 
 	/**
 	 * renderError
@@ -142,8 +170,16 @@ component singleton accessors="true" {
 	 * @foot    The footer row html.
 	 */
 	private string function assemble( required string head, required array middle, required string foot ){
-		// Reserve 600 characters for the wrapper and truncation notice.
-		var budget    = settings.maxBodyBytes - arguments.head.len() - arguments.foot.len() - 600;
+		// Measure the document chrome instead of estimating it, then reserve
+		// 600 characters for the truncation notice. Measuring keeps the size
+		// cap honest when the head grows, as it did when the style block
+		// was added.
+		var budget = settings.maxBodyBytes
+		 - variables.DOC_HEAD.len()
+		 - variables.DOC_FOOT.len()
+		 - arguments.head.len()
+		 - arguments.foot.len()
+		 - 600;
 		var kept      = [];
 		var truncated = false;
 
@@ -158,7 +194,7 @@ component singleton accessors="true" {
 
 		if ( truncated ) {
 			kept.append(
-				"<tr><td style=""padding:10px 20px;color:##71717a;font-size:12px;#variables.FONT#"">" &
+				"<tr><td class=""ea-sec"" style=""padding:10px 20px;color:##71717a;font-size:12px;#variables.FONT#"">" &
 				"Email truncated at #int( settings.maxBodyBytes / 1024 )# KB. See the server logs for full detail." &
 				"</td></tr>"
 			);
@@ -170,16 +206,13 @@ component singleton accessors="true" {
 	/**
 	 * wrapDocument
 	 *
-	 * Wraps the rows in the outer email tables.
+	 * Wraps the rows in the document head, the outer email tables, and the
+	 * closing tags.
 	 *
 	 * @inner The concatenated <tr> rows of the card.
 	 */
 	private string function wrapDocument( required string inner ){
-		return "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"" style=""background:##f4f4f5;padding:16px 0;#variables.FONT#"">" &
-		"<tr><td align=""center"" style=""padding:8px;"">" &
-		"<table role=""presentation"" width=""640"" cellpadding=""0"" cellspacing=""0"" style=""max-width:640px;width:100%;background:##ffffff;border:1px solid ##e4e4e7;"">" &
-		arguments.inner &
-		"</table></td></tr></table>";
+		return variables.DOC_HEAD & arguments.inner & variables.DOC_FOOT;
 	}
 
 	/**
@@ -200,7 +233,7 @@ component singleton accessors="true" {
 		meta.append( stamp( arguments.payload.timestamp ) );
 		meta.append( "occurrence #arguments.payload.occurrence# of #arguments.payload.maxPerWindow# sent per #windowText( arguments.payload.windowSeconds )# window" );
 
-		return "<tr><td style=""background:##b91c1c;color:##ffffff;padding:14px 20px;"">" &
+		return "<tr><td class=""ea-hd"" style=""background:##b91c1c;color:##ffffff;padding:14px 20px;"">" &
 		"<div style=""font-size:16px;font-weight:bold;#variables.FONT#"">#esc( arguments.payload.severity )# &middot; #esc( arguments.payload.category )#</div>" &
 		"<div style=""font-size:12px;margin-top:4px;color:##fecaca;#variables.FONT#"">#meta.toList( " &middot; " )#</div>" &
 		"</td></tr>";
@@ -223,7 +256,7 @@ component singleton accessors="true" {
 		}
 		meta.append( "#arguments.payload.suppressedCount# suppressed occurrences" );
 
-		return "<tr><td style=""background:##fef3c7;color:##92400e;padding:14px 20px;"">" &
+		return "<tr><td class=""ea-hd"" style=""background:##fef3c7;color:##92400e;padding:14px 20px;"">" &
 		"<div style=""font-size:16px;font-weight:bold;#variables.FONT#"">DIGEST &middot; #esc( arguments.payload.severity )#</div>" &
 		"<div style=""font-size:12px;margin-top:4px;#variables.FONT#"">#meta.toList( " &middot; " )#</div>" &
 		"</td></tr>";
@@ -343,7 +376,7 @@ component singleton accessors="true" {
 				var fnNote = fn.len() ? " <span style=""color:##a1a1aa;font-weight:normal;"">&middot; #esc( fn )#</span>" : "";
 
 				frames.append(
-					"<tr><td style=""padding:3px 8px;font-size:11px;#variables.MONO#color:#color#;font-weight:#weight#;background:#bg#;"">" &
+					"<tr><td class=""ea-frame"" style=""padding:3px 8px;font-size:11px;#variables.MONO#color:#color#;font-weight:#weight#;background:#bg#;"">" &
 					"#index#. #esc( frame.template )#:#esc( frame.line )##fnNote#" &
 					"</td></tr>"
 				);
@@ -386,11 +419,11 @@ component singleton accessors="true" {
 		var rows = [];
 		for ( var key in arguments.data ) {
 			rows.append(
-				"<tr><td style=""#variables.LABEL_CELL#"">#esc( key )#</td>" &
-				"<td style=""#variables.VALUE_CELL#"">#esc( arguments.data[ key ] )#</td></tr>"
+				"<tr class=""ea-kvr""><td class=""ea-l"" style=""#variables.LABEL_CELL#"">#esc( key )#</td>" &
+				"<td class=""ea-v"" style=""#variables.VALUE_CELL#"">#esc( arguments.data[ key ] )#</td></tr>"
 			);
 		}
-		return "<table role=""presentation"" width=""100%"" cellpadding=""0"" cellspacing=""0"">#rows.toList( "" )#</table>";
+		return "<table role=""presentation"" class=""ea-kv"" width=""100%"" cellpadding=""0"" cellspacing=""0"">#rows.toList( "" )#</table>";
 	}
 
 	/**
@@ -412,7 +445,7 @@ component singleton accessors="true" {
 			rows.append(
 				"<tr>" &
 				"<td style=""padding:2px 8px;width:1%;text-align:right;background:#bg#;color:##a1a1aa;font-size:11px;#variables.MONO#"">#esc( item.number )#</td>" &
-				"<td style=""padding:2px 8px;background:#bg#;color:#color#;font-weight:#weight#;font-size:11px;white-space:pre;#variables.MONO#"">#esc( item.text )#</td>" &
+				"<td class=""ea-code"" style=""padding:2px 8px;background:#bg#;color:#color#;font-weight:#weight#;font-size:11px;white-space:pre;#variables.MONO#"">#esc( item.text )#</td>" &
 				"</tr>"
 			);
 		}
@@ -451,7 +484,7 @@ component singleton accessors="true" {
 	 * @body  The section content html.
 	 */
 	private string function section( required string title, required string body ){
-		return "<tr><td style=""padding:14px 20px;border-top:1px solid ##f4f4f5;"">" &
+		return "<tr><td class=""ea-sec"" style=""padding:14px 20px;border-top:1px solid ##f4f4f5;"">" &
 		"<div style=""#variables.TITLE#"">#esc( arguments.title )#</div>" &
 		arguments.body &
 		"</td></tr>";
@@ -480,7 +513,7 @@ component singleton accessors="true" {
 		 ? "This digest summarizes occurrences suppressed after the first #settings.throttle.maxPerWindow# alerts of a window."
 		 : "After #settings.throttle.maxPerWindow# alerts, further occurrences of this error are suppressed for #windowLabel( settings.throttle.windowSeconds )# and summarized in a digest.";
 
-		return "<tr><td style=""padding:12px 20px;border-top:1px solid ##e4e4e7;background:##fafafa;color:##a1a1aa;font-size:11px;#variables.FONT#"">" &
+		return "<tr><td class=""ea-ft"" style=""padding:12px 20px;border-top:1px solid ##e4e4e7;background:##fafafa;color:##a1a1aa;font-size:11px;#variables.FONT#"">" &
 		"#note#<br/>" &
 		"signature #esc( arguments.payload.keyExists( "signature" ) ? arguments.payload.signature : "" )# &middot; errorAlerts #esc( arguments.payload.moduleVersion )#" &
 		"</td></tr>";

@@ -25,7 +25,10 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].subject ).toInclude( "[Harness]" );
 				expect( mailbox[ 1 ].subject ).toInclude( "ERROR" );
 				expect( mailbox[ 1 ].body ).toInclude( "e2e boom" );
-				expect( mailbox[ 1 ].body ).notToInclude( "<style" );
+				expect( mailbox[ 1 ].body ).toInclude(
+					"@media only screen",
+					"the delivered email carries the small-screen rules"
+				);
 				expect( mailbox[ 1 ].body ).toInclude( "url", "the request section carries the copyable URL row" );
 				expect( mailbox[ 1 ].body ).toInclude( "Runtime", "engine and framework versions are listed" );
 			} );

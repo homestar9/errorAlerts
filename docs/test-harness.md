@@ -11,25 +11,82 @@ fires them all in sequence.
 ## Sending real email
 
 By default the harness keeps sent mail in memory, because the TestBox specs read
-that mailbox. To send to a local SMTP server instead:
+that mailbox. To send real email instead, use the mailer links in the status
+block on the home page, or request the route directly:
+
+```text
+/main/mailer?use=smtp        # a local mail catcher, such as DevNull SMTP
+/main/mailer?use=mailtrap    # a Mailtrap sandbox inbox
+/main/mailer?use=default     # back to the in-memory mailbox
+```
+
+No restart is needed. Every mailer is registered when the server starts, so the
+route only changes which one is the default and which connection settings go out
+with each message. It also shortens the throttle window to 60 seconds while a
+sending mailer is active, so a digest arrives about a minute after a burst
+instead of ten. The switch lasts until the server restarts.
+
+**Reading alerts on a phone.** Use the `mailtrap` mailer. A local catcher writes
+`.eml` files to your own disk, which is awkward to open on a phone, while a
+Mailtrap inbox is a web app you can log into from the phone itself. Note that
+Mailtrap renders each email inside its own preview pane, so the small-screen
+media query responds to that pane rather than to the phone's screen width; use
+Mailtrap's mobile-preview toggle and its HTML check for an honest reading of the
+responsive layout.
+
+### Where the connection settings live
+
+`mailerDefaults()` in `test-harness/config/Coldbox.cfc` holds the host, port and
+credentials for every mailer, and both startup and `/main/mailer` read it, so
+each value is written once. Adding a mailer means adding an entry there plus a
+`{ class : "CFMail" }` line in the `mailers` struct. No handler or view change is
+needed: the route validates `rc.use` against the registered names and the home
+page renders one link per mailer.
+
+Per-mailer `properties` do **not** work for a `CFMail` mailer.
+`CFMailProtocol.mailIt()` only reads the mail payload's own config and never
+looks at the protocol's properties, so connection settings have to travel as mail
+defaults, which `newMail()` appends onto every message. `Mail.configure()`
+accepts `server`, `port`, `username`, `password` and `useTLS` as real arguments,
+so each one reaches the `cfmail` tag.
+
+The specs read the in-memory mailbox, so switch back to `default` before running
+them. An empty mailbox and a wall of failing integration specs usually means the
+harness was left on a sending mailer.
+
+### Setting the startup mailer
+
+`ERRORALERTS_MAILER` in `.env` decides which mailer is active when the server
+boots, and `.env` is also where the Mailtrap credentials go:
 
 ```bash
 cp .env.example .env      # already gitignored
 box run-script start:2023
 ```
 
-`.env` sets `ERRORALERTS_MAILER=smtp`, which does three things in
+Copy the username and password from your Mailtrap inbox's SMTP settings into
+`ERRORALERTS_MAILTRAP_USERNAME` and `ERRORALERTS_MAILTRAP_PASSWORD`. Keep real
+credentials out of `.env.example`, which is committed.
+
+Setting `ERRORALERTS_MAILER` to anything but `default` does three things in
 `test-harness/config/Coldbox.cfc`:
 
 - switches cbmailservices to its `CFMail` mailer, which sends through the
-  `cfmail` tag to `ERRORALERTS_SMTP_SERVER:ERRORALERTS_SMTP_PORT`
+  `cfmail` tag to that mailer's entry in `mailerDefaults()`
 - turns mail spooling off, so a delivery failure shows up straight away instead
   of being queued
 - shortens the throttle window to 60 seconds and the digest flush to 20, so a
   digest email arrives about a minute after a burst instead of ten
 
-Leave `ERRORALERTS_MAILER` unset and everything goes back to the in-memory
-mailbox. `/main/lastMail` renders the newest in-memory email in the browser.
+An unrecognized name falls back to the in-memory mailbox rather than failing to
+start. Leave `ERRORALERTS_MAILER` unset and the server starts in memory anyway.
+
+CommandBox reads `.env` only at startup, so changing it needs a full server
+restart. That is why the `/main/mailer` route exists. The one thing the route
+cannot change is `digestFlushSeconds`, because a scheduled task reads it when the
+module loads; use `/trigger/flushDigest` to send a digest on demand instead.
+
+`/main/lastMail` renders the newest in-memory email in the browser.
 
 ## The scenario catalog
 
