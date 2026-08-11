@@ -40,8 +40,18 @@ http://127.0.0.1:[port]/tests/runner.cfm?directory=tests.specs.unit   # one dire
 CFML specs live in `test-harness/tests/specs/` (`unit/`, `integration/`). Unit specs extend
 `tests.resources.BaseUnitSpec` (shared settings and exception fixtures); integration specs extend
 `tests.resources.BaseIntegrationSpec` (in-memory mailbox helpers). The integration specs read the
-in-memory mailbox, so unset `ERRORALERTS_MAILER` (remove or edit `.env`) before running them - with
-the SMTP mailer active the mailbox stays empty and the specs fail.
+in-memory mailbox, so the harness must be on the `default` mailer before running them - with a
+sending mailer active the mailbox stays empty and the specs fail. Request
+`/main/mailer?use=default` to switch back without restarting the server; `ERRORALERTS_MAILER` in
+`.env` only sets which mailer is active at startup.
+
+The harness registers three mailers: `default` (in memory), `smtp` (a local catcher) and `mailtrap`
+(a sandbox inbox you can read on a phone). `mailerDefaults()` in
+`test-harness/config/Coldbox.cfc` is the single place their hosts, ports and credentials live, and
+both startup and the `/main/mailer` route read it. Do not try to configure a `CFMail` mailer through
+its per-mailer `properties`: `CFMailProtocol` never reads them, so connection settings only take
+effect as cbmailservices mail defaults. Credentials belong in `.env`, which is gitignored, never in
+the committed `.env.example`.
 
 [docs/test-harness.md](docs/test-harness.md) covers the failure scenario catalog on the harness home
 page and how to send its alert emails to a local SMTP server so you can read them as real email.
@@ -96,6 +106,32 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - `test-harness/tests/specs/perf/PayloadBuilderBenchmarkTest.cfc` times alert building against large
   payloads (`?directory=tests.specs.perf`). Run it before and after touching PayloadBuilder's
   sanitize path and compare against the numbers in the relevant commit messages.
+
+## Email rendering invariants
+
+`models/EmailRenderer.cfc` builds the whole email as concatenated strings. There are no views.
+
+- The email is a complete HTML document. Its only `<style>` block is `MOBILE_CSS`, which contains a
+  single `@media only screen and (max-width:600px)` rule and nothing else. Never put an
+  unconditional rule there. Many mail clients strip style blocks, so the desktop layout has to come
+  entirely from inline styles. A spec used to assert the email contained no style block at all;
+  that assertion was replaced with a narrower one, not dropped, so do not restore it.
+- Every element that carries a class must also carry the inline styles that class overrides, and
+  the `class` attribute must come immediately before `style`. `EmailRendererTest` checks for the
+  literal `class="ea-x" style=`.
+- Use only class selectors in `MOBILE_CSS`. An ID selector or a hex color would need `##` escaping
+  inside the CFML string, which is easy to get wrong.
+- `assemble()` subtracts the measured lengths of `DOC_HEAD` and `DOC_FOOT` from `maxBodyBytes`.
+  Growing the document chrome without that subtraction breaks the size cap.
+- Adding markup to a per-row helper such as `kvTable()` multiplies across every row. A wide `rc`
+  can hold hundreds of rows, so it comes out of the same budget.
+- Known limitation, not a regression: on a wide screen one long source line still makes the card
+  wider than its 640px maximum. `snippetBlock()` uses `white-space:pre`, and a table cannot shrink
+  below the width of its content, so `max-width` cannot clamp it. The media query fixes this on
+  small screens only. Changing it would change the desktop layout, so ask before doing so.
+- To check a layout change, open `/main/lastMail` on the harness after firing a scenario. It
+  renders the newest in-memory email as HTML. Chrome's headless mode pins a 500px minimum window,
+  so put the email in a 360px `<iframe>` to test the media query at a real phone width.
 
 ## Releasing
 

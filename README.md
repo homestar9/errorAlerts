@@ -73,6 +73,8 @@ Visit the action in your browser. You should receive an email with the error det
 
 If an error starts deep inside framework or ORM code, the email also finds the first frame from your application. The email labels this frame and its source as "Application caller." A row such as "... 5 frames omitted" marks a shortened stack.
 
+The email adjusts to small screens. On a screen narrower than 600 pixels, each label moves above its value so the value gets the full width, section padding shrinks, and long source lines and file paths wrap instead of running off the side. Every element also carries its own inline styles, so a mail client that ignores embedded style blocks, such as Outlook on Windows, still shows the normal two-column layout. There is no setting to configure here.
+
 Remove the test action after confirming delivery.
 
 ## Using errorAlerts
@@ -419,6 +421,7 @@ moduleSettings = {
 | `longValueMaxLength` | `500` | Per-value cap for string values found while walking `extraInfo` or a JSON body. Longer values keep this many characters plus a label stating the real size. `0` disables the per-value cap. |
 | `longValueExemptKeys` | `[ "_stacktrace", "stacktrace" ]` | Keys whose values skip the per-value cap, matched exactly ignoring case, so stack traces keep their frames. The whole-output caps still apply. |
 | `extraInfoMaxLength` | `2000` | Maximum characters of sanitized `extraInfo` shown, and the collection budget for its walk. |
+| `exceptionFieldMaxLength` | `2048` | Maximum characters of the exception `detail` and `extendedInfo` fields shown. `0` disables the cap; `maxBodyBytes` still limits the whole email. |
 
 Masking is opt-in and has its own section above: see [Masking and sanitization](#masking-and-sanitization) for the starter list, wildcard patterns, and long-value truncation.
 

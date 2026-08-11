@@ -110,11 +110,21 @@
 <p class="lede">Each link below fails in one specific way. Fire one and read the alert it produces.</p>
 
 <div class="status">
-	<div>mailer&nbsp;&nbsp;&nbsp;= #encodeForHtml( prc.mailer )#<cfif prc.mailer eq "smtp"> &rarr; #encodeForHtml( prc.mailDefaults.server )#:#encodeForHtml( prc.mailDefaults.port )#<cfelse> (in-memory &mdash; set ERRORALERTS_MAILER=smtp in .env to send real email)</cfif></div>
+	<div>mailer&nbsp;&nbsp;&nbsp;= #encodeForHtml( prc.mailer )#<cfif prc.mailer neq "default"> &rarr; #encodeForHtml( prc.mailDefaults.server )#:#encodeForHtml( prc.mailDefaults.port )#<cfelse> (in-memory)</cfif>
+		<cfloop array="#prc.mailers#" index="name">
+			<cfif name neq prc.mailer><a href="/main/mailer?use=#encodeForUrl( name )#">[switch to #encodeForHtml( name )#]</a> </cfif>
+		</cfloop>
+	</div>
 	<div>alerts to = #encodeForHtml( prc.alerts.to )#</div>
 	<div>throttle&nbsp;= #prc.alerts.throttle.maxPerWindow# per #prc.alerts.throttle.windowSeconds#s, digest flush every #prc.alerts.digestFlushSeconds#s</div>
 	<div>database&nbsp;= #encodeForHtml( prc.database )#</div>
 </div>
+
+<p class="quiet">
+	Switching the mailer takes effect immediately and lasts until the server restarts.
+	ERRORALERTS_MAILER in .env sets which mailer is active at startup.
+	The TestBox specs read the in-memory mailbox, so switch back before running them.
+</p>
 
 <p>
 	<button type="button" id="fireAll">Fire all #arrayLen( sweep )# scenarios</button>

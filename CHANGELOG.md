@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-11
+
+### Added
+
+- **The alert email now adjusts to small screens.** On a screen narrower than
+  600 pixels each label moves above its value, so long values such as URLs,
+  file paths, and `rc` entries use the full width instead of a squeezed column.
+  Section padding shrinks from 20 to 12 pixels, and long source lines and stack
+  frame paths wrap instead of running off the side. Measured against the test
+  harness on a 360 pixel screen, the email went from 1249 pixels wide to 344.
+- The email is now a complete HTML document with a viewport meta tag. It used
+  to be a bare `<table>` fragment, which left phones to guess the layout width.
+- `exceptionFieldMaxLength`, default `2048`, controls how many characters of
+  the exception `detail` and `extendedInfo` fields the email shows. Both
+  limits were hardcoded at 1024 before. Set `0` to disable the cap;
+  `maxBodyBytes` still limits the whole email.
+
+### Changed
+
+- The rendered email carries one `<style>` block holding a single
+  `@media only screen and (max-width:600px)` rule, and elements carry `ea-`
+  prefixed classes. Every element still carries the inline styles it had
+  before, so a mail client that ignores embedded style blocks, such as Outlook
+  on Windows, renders the same two-column layout as earlier versions.
+- `assemble()` now subtracts the measured length of the document head and
+  footer from the `maxBodyBytes` budget instead of assuming a fixed 600
+  characters. Without this the larger head could push an email past the cap.
+
+### Known limitation
+
+- On a wide screen a single long line of source code still makes the email card
+  wider than its 640 pixel maximum, because the snippet table uses
+  `white-space:pre` and a table cannot shrink below its content. This behavior
+  is unchanged from earlier versions and only affects wide screens; small
+  screens now wrap those lines.
+
 ## [2.5.0] - 2026-08-07
 
 ### Security
