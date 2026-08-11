@@ -2,8 +2,8 @@
  * Tests inline HTML, escaping, length limits, and digest rendering.
  */
 component extends="tests.resources.BaseUnitSpec" {
-
-	/**
+    
+    /**
 	 * run
 	 *
 	 * Defines EmailRenderer unit tests.
@@ -167,6 +167,36 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( html ).toInclude( "Caused by" );
 				expect( html ).toInclude( "SQLGrammar" );
 				expect( html ).toInclude( "Extended info" );
+			} );
+
+			it( "caps the detail and extended info fields at exceptionFieldMaxLength", function(){
+				var payload                    = newErrorPayload();
+				payload.exception.detail       = repeatString( "D", 2500 );
+				payload.exception.extendedInfo = repeatString( "E", 2500 );
+                var maxLength = settings.exceptionFieldMaxLength;
+
+				var html = renderer.renderError( payload );
+				expect( html ).toInclude( repeatString( "D", maxLength ) );
+				expect( html ).notToInclude( repeatString( "D", maxLength + 1 ), "detail stops at the default #maxLength#" );
+				expect( html ).toInclude( repeatString( "E", maxLength ) );
+				expect( html ).notToInclude( repeatString( "E", maxLength + 1 ), "extended info stops at the default #maxLength#" );
+			} );
+
+			it( "respects an exceptionFieldMaxLength override and 0 disables the cap", function(){
+				settings.exceptionFieldMaxLength = 100;
+
+				var payload                    = newErrorPayload();
+				payload.exception.detail       = repeatString( "D", 2500 );
+				payload.exception.extendedInfo = repeatString( "E", 2500 );
+
+				var html = renderer.renderError( payload );
+				expect( html ).toInclude( repeatString( "E", 100 ) );
+				expect( html ).notToInclude( repeatString( "E", 101 ) );
+
+				settings.exceptionFieldMaxLength = 0;
+				html                             = renderer.renderError( payload );
+				expect( html ).toInclude( repeatString( "D", 2500 ), "0 turns the cap off for detail" );
+				expect( html ).toInclude( repeatString( "E", 2500 ), "0 turns the cap off for extended info" );
 			} );
 
 			it( "renders the Runtime section only when the payload carries it", function(){

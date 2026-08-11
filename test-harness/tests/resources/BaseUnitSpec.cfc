@@ -77,7 +77,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			maskKeyPatterns      : [],
 			longValueMaxLength   : 500,
 			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
-			extraInfoMaxLength   : 2000
+			extraInfoMaxLength   : 2000,
+			exceptionFieldMaxLength : 2048
 		};
 	}
 

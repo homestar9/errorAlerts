@@ -421,6 +421,7 @@ moduleSettings = {
 | `longValueMaxLength` | `500` | Per-value cap for string values found while walking `extraInfo` or a JSON body. Longer values keep this many characters plus a label stating the real size. `0` disables the per-value cap. |
 | `longValueExemptKeys` | `[ "_stacktrace", "stacktrace" ]` | Keys whose values skip the per-value cap, matched exactly ignoring case, so stack traces keep their frames. The whole-output caps still apply. |
 | `extraInfoMaxLength` | `2000` | Maximum characters of sanitized `extraInfo` shown, and the collection budget for its walk. |
+| `exceptionFieldMaxLength` | `2048` | Maximum characters of the exception `detail` and `extendedInfo` fields shown. `0` disables the cap; `maxBodyBytes` still limits the whole email. |
 
 Masking is opt-in and has its own section above: see [Masking and sanitization](#masking-and-sanitization) for the starter list, wildcard patterns, and long-value truncation.
 

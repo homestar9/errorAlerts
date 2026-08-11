@@ -146,7 +146,10 @@ component {
 			 * ignores case. The defaults keep useful stack frames from being cut off. */
 			longValueExemptKeys  : [ "_stacktrace", "stacktrace" ],
 			// Cap the sanitized extraInfo output at this many characters.
-			extraInfoMaxLength   : 2000
+			extraInfoMaxLength   : 2000,
+			/* Cap the exception detail and extendedInfo fields shown in the
+			 * email at this many characters. 0 disables the cap. */
+			exceptionFieldMaxLength : 2048
 		};
 	}
 

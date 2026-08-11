@@ -301,7 +301,7 @@ component singleton accessors="true" {
 			body &= "<div style=""margin:0 0 4px 0;font-size:12px;#variables.MONO#color:##18181b;""><strong>#esc( arguments.exception.type )#</strong>#code#</div>";
 		}
 		if ( arguments.exception.detail.len() ) {
-			body &= preBlock( arguments.exception.detail.left( 1024 ) );
+			body &= preBlock( clipExceptionField( arguments.exception.detail ) );
 		}
 
 		// Show the failing source first because it often explains the error.
@@ -337,7 +337,7 @@ component singleton accessors="true" {
 
 		if ( extendedInfo.len() ) {
 			body &= subTitle( "Extended info" );
-			body &= preBlock( extendedInfo.left( 1024 ) );
+			body &= preBlock( clipExceptionField( extendedInfo ) );
 		}
 
 		// A cause may contain the low-level error that the framework replaced.
@@ -499,6 +499,20 @@ component singleton accessors="true" {
 	 */
 	private string function preBlock( required string text ){
 		return "<div style=""white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;#variables.MONO#color:##18181b;"">#esc( arguments.text )#</div>";
+	}
+
+	/**
+	 * clipExceptionField
+	 *
+	 * Shortens an exception text field to the exceptionFieldMaxLength setting.
+	 * A setting of 0 disables the cap and returns the text unchanged.
+	 *
+	 * @text The field text to shorten.
+	 */
+	private string function clipExceptionField( required string text ){
+		return settings.exceptionFieldMaxLength > 0
+		 ? arguments.text.left( settings.exceptionFieldMaxLength )
+		 : arguments.text;
 	}
 
 	/**

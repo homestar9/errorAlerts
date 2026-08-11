@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   harness on a 360 pixel screen, the email went from 1249 pixels wide to 344.
 - The email is now a complete HTML document with a viewport meta tag. It used
   to be a bare `<table>` fragment, which left phones to guess the layout width.
+- `exceptionFieldMaxLength`, default `2048`, controls how many characters of
+  the exception `detail` and `extendedInfo` fields the email shows. Both
+  limits were hardcoded at 1024 before. Set `0` to disable the cap;
+  `maxBodyBytes` still limits the whole email.
 
 ### Changed
 
