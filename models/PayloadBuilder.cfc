@@ -2,7 +2,11 @@
  * PayloadBuilder
  *
  * Converts a LogBox event and available request data into a plain struct.
- * Request sections return empty values when no request context exists.
+ *
+ * A ColdBox request provides its event, routing details, and request collection.
+ * A web request outside ColdBox provides a "not a ColdBox request" row instead
+ * of routing details. Its request collection combines FORM and URL fields.
+ * Events outside web requests have no FORM or URL fields to include.
  */
 component singleton accessors="true" {
 
@@ -556,6 +560,10 @@ component singleton accessors="true" {
 	 * Missing request values use settings.emptyValueText. The user and sessionId
 	 * rows only appear when their features are active.
 	 *
+	 * A request outside ColdBox gets one coldbox row instead of routing rows.
+	 * If reading the request context fails, keep the routing rows and fill any
+	 * missing values with placeholders. This shows the failure in the email.
+	 *
 	 * @exception The already-built exception struct, used to find the origin.
 	 */
 	private struct function buildRequest( struct exception = {} ){
@@ -572,20 +580,25 @@ component singleton accessors="true" {
 		}
 
 		try {
-			var event = coldbox.getRequestService().getContext();
-			addValue( info, "event", event.getCurrentEvent() );
-			// A routed URL sets this value. An index.cfm?event= request does not.
-			addValue( info, "route", event.getCurrentRoutedUrl() );
-			// Show the route pattern that matched the current URL.
-			addValue( info, "routePattern", event.getCurrentRoute() );
-			addValue( info, "routeName", event.getCurrentRouteName() );
-			addValue( info, "routedModule", event.getCurrentRoutedModule() );
-			addValue( info, "routedNamespace", event.getCurrentRoutedNamespace() );
-			// How far rendering got before the error.
-			addValue( info, "view", event.getCurrentView() );
-			addValue( info, "layout", event.getCurrentLayout() );
-			// Record whether the caller was an Ajax request.
-			addValue( info, "isAjax", event.isAjax() ? "yes" : "no" );
+			if ( hasColdBoxContext() ) {
+				var event = coldbox.getRequestService().getContext();
+				addValue( info, "event", event.getCurrentEvent() );
+				// A routed URL sets this value. An index.cfm?event= request does not.
+				addValue( info, "route", event.getCurrentRoutedUrl() );
+				// Show the route pattern that matched the current URL.
+				addValue( info, "routePattern", event.getCurrentRoute() );
+				addValue( info, "routeName", event.getCurrentRouteName() );
+				addValue( info, "routedModule", event.getCurrentRoutedModule() );
+				addValue( info, "routedNamespace", event.getCurrentRoutedNamespace() );
+				// How far rendering got before the error.
+				addValue( info, "view", event.getCurrentView() );
+				addValue( info, "layout", event.getCurrentLayout() );
+				// Record whether the caller was an Ajax request.
+				addValue( info, "isAjax", event.isAjax() ? "yes" : "no" );
+			} else {
+				// Requests outside ColdBox have no routing details to show.
+				addValue( info, "coldbox", "not a ColdBox request" );
+			}
 		} catch ( any e ) {
 			// Fill missing keys without replacing values that were already read.
 			var routingKeys = [
@@ -1221,14 +1234,65 @@ component singleton accessors="true" {
 	 * buildRc
 	 *
 	 * Returns a sanitized request collection.
-	 * Returns an empty struct when no request context exists.
+	 * Use the ColdBox request collection when available. For a web request
+	 * outside ColdBox, combine FORM and URL fields as ColdBox would.
+	 * Return an empty struct if the collection cannot be built.
 	 */
 	private struct function buildRc(){
 		try {
-			return sanitizeScope( coldbox.getRequestService().getContext().getCollection() );
+			return sanitizeScope(
+				hasColdBoxContext()
+				 ? coldbox.getRequestService().getContext().getCollection()
+				 : scopeCollection()
+			);
 		} catch ( any e ) {
 			return {};
 		}
+	}
+
+	/**
+	 * hasColdBoxContext
+	 *
+	 * Checks whether ColdBox routed the current request.
+	 * Check contextExists() before calling getContext(), because getContext()
+	 * creates a context if one is missing. Then check for a non-empty event name.
+	 * Code outside ColdBox can create an empty context by calling WireBox.
+	 * That empty context does not count as a ColdBox request. Keep this method
+	 * identical to the copy in CaptureService.
+	 */
+	private boolean function hasColdBoxContext(){
+		var requestService = coldbox.getRequestService();
+		if ( !requestService.contextExists() ) {
+			return false;
+		}
+		return requestService.getContext().getCurrentEvent().len() > 0;
+	}
+
+	/**
+	 * scopeCollection
+	 *
+	 * Returns the merged FORM and URL scopes for a request outside ColdBox.
+	 * URL values replace FORM values with the same key, as in ColdBox's
+	 * requestCapture(). Return an empty struct when there is no web request,
+	 * such as for a scheduled task or a background thread.
+	 *
+	 * Keep this in a separate method so tests can supply fields without changing
+	 * the test runner's FORM and URL scopes.
+	 */
+	private struct function scopeCollection(){
+		var collection = {};
+
+		try {
+			if ( !cgi.request_method.trim().len() ) {
+				return collection;
+			}
+			structAppend( collection, form );
+			structAppend( collection, url );
+		} catch ( any e ) {
+			return {};
+		}
+
+		return collection;
 	}
 
 	/**

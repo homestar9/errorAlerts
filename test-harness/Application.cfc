@@ -120,9 +120,63 @@ component {
 			pagePoolClear();
 		}
 
+		/* Throw before startFail.cfm runs. Adobe puts errors from Application.cfc
+		 * event methods inside an EventHandlerException before passing them to
+		 * onError(). This scenario checks that the alert reports the original error. */
+		if ( arguments.targetPage.findNoCase( "/legacy/startFail.cfm" ) ) {
+			throw(
+				type    = "Harness.StartFail",
+				message = "Thrown from onRequestStart for a legacy page",
+				detail  = "Adobe passes this error to onError() inside an EventHandlerException."
+			);
+		}
+
 		application.cbBootstrap.onRequestStart( arguments.targetPage );
 
 		return true;
+	}
+
+	/**
+	 * onError
+	 *
+	 * Reports errors from pages outside ColdBox, then shows a short error page.
+	 * ColdBox handles errors from its own requests before they reach this method.
+	 * The README shows this setup for older pages that share the ColdBox application.
+	 *
+	 * @exception The exception the engine passed to onError().
+	 * @eventName The Application.cfc method that was running, or an empty string.
+	 */
+	public void function onError( required any exception, string eventName = "" ) output="true"{
+		try {
+			var reinitInProgress = structKeyExists( application, "fwReinit" ) && application.fwReinit;
+			if ( !reinitInProgress && structKeyExists( application, "cbController" ) ) {
+				application.cbController
+					.getWireBox()
+					.getInstance( "CaptureService@errorAlerts" )
+					.captureException( arguments.exception );
+			}
+		} catch ( any e ) {
+			// The alert must never replace the error page.
+		}
+
+		try {
+			cfheader( statusCode = 500 );
+		} catch ( any e ) {
+		}
+
+		var type = "";
+		try {
+			type = arguments.exception.type;
+		} catch ( any e ) {
+		}
+
+		writeOutput(
+			"<h1>Harness error page (outside ColdBox)</h1>" &
+			"<p>Application.cfc onError() caught <code>#encodeForHtml( type )#</code>" &
+			"#( len( arguments.eventName ) ? " while running <code>" & encodeForHtml( arguments.eventName ) & "</code>" : "" )#" &
+			". This handler uses errorAlerts to report errors.</p>" &
+			"<p><a href=""/main/lastMail"">Read the latest alert</a> or <a href=""/"">return to the scenario list</a>.</p>"
+		);
 	}
 
 	/**

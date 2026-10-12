@@ -88,6 +88,17 @@
 				{ route : "/trigger/hugeMessage", note : "250KB message and detail. Each section clips long before maxBodyBytes, so the email lands around 12KB." },
 				{ route : "/trigger/postForm", note : "POST, so the Request section shows POST and the form fields.", method : "POST" }
 			]
+		},
+		{
+			title       : "Legacy pages (outside ColdBox)",
+			description : "These .cfm files under /legacy/ run without ColdBox, as older pages might. Application.cfc's onError() reports their errors through CaptureService.captureException(). The alert category is UnhandledException. The Request section shows a coldbox row instead of routing details. The request collection (rc) combines posted form fields and URL query string fields.",
+			scenarios   : [
+				{ route : "/legacy/boom.cfm?password=hunter2&orderId=88213", note : "Throws an error from a page outside ColdBox. The password value should show *** masked ***. The orderId value should be visible. The origin should be /legacy/boom.cfm." },
+				{ route : "/legacy/undefinedVariable.cfm", note : "Reads a variable that was never set, so the engine's own error reaches onError()." },
+				{ route : "/legacy/postForm.cfm", note : "Submits a POST request. The alert's request collection (rc) should show the posted fields.", method : "POST" },
+				{ route : "/legacy/startFail.cfm", note : "Throws an error in Application.cfc's onRequestStart(). On Adobe, the email must show the original error type, Harness.StartFail." },
+				{ route : "/legacy/abortPage.cfm", note : "Redirects with location(), then stops the request with abort. No email should arrive on any engine.", alerts : false }
+			]
 		}
 	];
 

@@ -390,7 +390,57 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.request ).toHaveKey( "forwardedFor" );
 			} );
 
-			it( "returns placeholder request rows and an empty rc when there is no request context", function(){
+			it( "describes a request outside ColdBox and builds its request collection from FORM and URL", function(){
+				var controllerStub = newControllerStub( hasContext = false );
+				builder.$property( propertyName = "coldbox", mock = controllerStub );
+				builder.$( "scopeCollection", { password : "hunter2", orderId : 88213 } );
+
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
+				expect( payload.request.coldbox ).toBe( "not a ColdBox request" );
+				for ( var key in [ "event", "route", "routePattern", "routeName", "routedModule", "routedNamespace", "view", "layout", "isAjax" ] ) {
+					expect( payload.request ).notToHaveKey( key, "routing rows are left out instead of printing N/A" );
+				}
+				expect( payload.request ).toHaveKey( "origin" );
+				expect( payload.request ).toHaveKey( "method", "the request still includes the HTTP method from CGI" );
+				expect( payload.rc.password ).toBe( "*** masked ***", "maskKeys also hides matching values collected from FORM and URL" );
+				expect( payload.rc.orderId ).toBe( "88213" );
+				expect( controllerStub.getRequestService().$count( "getContext" ) ).toBe(
+					0,
+					"getContext() must not be called, because it creates a context"
+				);
+			} );
+
+			it( "treats a context with no event name as a request outside ColdBox", function(){
+				// Calling WireBox from outside ColdBox can create a context with no event name.
+				builder.$property( propertyName = "coldbox", mock = newControllerStub( currentEvent = "" ) );
+				builder.$( "scopeCollection", { orderId : 1 } );
+
+				var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
+				expect( payload.request ).toHaveKey( "coldbox" );
+				expect( payload.request ).notToHaveKey( "event" );
+				expect( payload.rc.orderId ).toBe( "1" );
+			} );
+
+			it( "combines FORM and URL fields, with URL values replacing FORM values as in ColdBox requestCapture", function(){
+				makePublic( builder, "scopeCollection" );
+				form[ "eaProbe" ]    = "from-form";
+				url[ "eaProbe" ]     = "from-url";
+				form[ "eaFormOnly" ] = "form-only";
+
+				try {
+					var collection = builder.scopeCollection();
+					expect( collection.eaProbe ).toBe( "from-url" );
+					expect( collection.eaFormOnly ).toBe( "form-only" );
+				} finally {
+					structDelete( form, "eaProbe" );
+					structDelete( url, "eaProbe" );
+					structDelete( form, "eaFormOnly" );
+				}
+			} );
+
+			it( "returns placeholder request rows and an empty rc when the request service fails", function(){
 				var broken = createStub();
 				broken.$( "getSetting", "" );
 				broken.$(
@@ -837,11 +887,18 @@ component extends="tests.resources.BaseUnitSpec" {
 	 * Builds a controller stub with settings and a request collection.
 	 * The event stub implements every context method used by PayloadBuilder.
 	 *
-	 * @rc The request collection the stubbed context returns.
+	 * @rc           The request collection the stubbed context returns.
+	 * @hasContext   The value returned by the stub's contextExists() method.
+	 * @currentEvent The event name returned by the stubbed context. An empty value
+	 *               represents a context for a request outside ColdBox.
 	 */
-	private any function newControllerStub( struct rc = {} ){
+	private any function newControllerStub(
+		struct rc = {},
+		boolean hasContext = true,
+		string currentEvent = "orders.save"
+	){
 		var eventStub = createStub();
-		eventStub.$( "getCurrentEvent", "orders.save" );
+		eventStub.$( "getCurrentEvent", arguments.currentEvent );
 		eventStub.$( "getCurrentRoutedUrl", "/orders/save" );
 		eventStub.$( "getCurrentRoute", "orders/:action/" );
 		eventStub.$( "getCurrentRouteName", "orderSave" );
@@ -853,6 +910,7 @@ component extends="tests.resources.BaseUnitSpec" {
 		eventStub.$( "getCollection", arguments.rc );
 
 		var requestServiceStub = createStub();
+		requestServiceStub.$( "contextExists", arguments.hasContext );
 		requestServiceStub.$( "getContext", eventStub );
 
 		var controllerStub = createStub();

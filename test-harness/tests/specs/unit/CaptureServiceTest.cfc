@@ -153,6 +153,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				eventStub.$( "getCurrentRoutedUrl", "blog/hello/" );
 				eventStub.$( "getCurrentEvent", "posts.show" );
 				var requestServiceStub = createStub();
+				requestServiceStub.$( "contextExists", true );
 				requestServiceStub.$( "getContext", eventStub );
 				var controllerStub = createStub();
 				controllerStub.$( "getRequestService", requestServiceStub );
@@ -164,7 +165,182 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( snapshot ).toHaveKey( "client", "the client address is read from the CGI scope" );
 			} );
 
-			it( "leaves the snapshot route blank when there is no request context", function(){
+			it( "uses the request path as the snapshot route outside ColdBox", function(){
+				makePublic( capture, "buildSnapshot" );
+
+				var requestServiceStub = createStub();
+				requestServiceStub.$( "contextExists", false );
+				// Register this mock so $count() can return zero instead of "never mocked".
+				requestServiceStub.$( "getContext", createStub() );
+				var controllerStub = createStub();
+				controllerStub.$( "getRequestService", requestServiceStub );
+				capture.$property( propertyName = "coldbox", mock = controllerStub );
+
+				var snapshot = capture.buildSnapshot( newLogEvent() );
+				// Adobe cannot call a method on (condition ? a : b). Store the path first.
+				var path     = cgi.path_info.trim().len() ? cgi.path_info : cgi.script_name;
+				var expected = left( path, 200 );
+
+				expect( snapshot.route ).toBe( expected, "the snapshot route contains the page path" );
+				expect( requestServiceStub.$count( "getContext" ) ).toBe( 0, "building the snapshot does not create a request context" );
+			} );
+
+			it( "sends nothing when the module is disabled", function(){
+				settings.enabled = false;
+				capture.capture( newLogEvent() );
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				expect( throttleStub.$count( "record" ) ).toBe( 0, "a disabled module does not record errors for throttling" );
+			} );
+
+			describe( "captureException", function(){
+				beforeEach( function(){
+					// Every spec shares one runner request, so clear the per-request state.
+					structDelete( request, "_errorAlertsReported" );
+					structDelete( request, "_errorAlertsCapturing" );
+				} );
+
+				it( "builds the unhandled-exception LogEvent and captures it", function(){
+					capture.$( "capture" );
+					var info = newExceptionInfo();
+
+					capture.captureException( info );
+
+					expect( capture.$count( "capture" ) ).toBe( 1 );
+					var logEvent = capture.$callLog().capture[ 1 ][ 1 ];
+					expect( logEvent.getMessage() ).toBe( "Unhandled exception: Fixture explosion Deliberate test exception" );
+					expect( logEvent.getSeverity() ).toBe( 1 );
+					expect( logEvent.getCategory() ).toBe( "UnhandledException" );
+					expect( logEvent.getExtraInfo() ).toBe( info );
+				} );
+
+				it( "sends nothing when the module is disabled", function(){
+					settings.enabled = false;
+					capture.captureException( newExceptionInfo() );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				} );
+
+				it( "reloads the module mappings before capturing", function(){
+					/* On Lucee and BoxLang, onError() has no module mappings if it runs
+					 * before ColdBox starts handling the request. Without a reload, the
+					 * first mail build fails and later alerts fail until the application
+					 * is reinitialized. */
+					var moduleServiceStub = createStub();
+					moduleServiceStub.$( "loadMappings" );
+					var controllerStub = createStub();
+					controllerStub.$( "getModuleService", moduleServiceStub );
+					capture.$property( propertyName = "coldbox", mock = controllerStub );
+
+					capture.captureException( newExceptionInfo() );
+
+					expect( moduleServiceStub.$count( "loadMappings" ) ).toBe( 1 );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "still captures when the mappings cannot be reloaded", function(){
+					var broken = createStub();
+					broken.$(
+						method         = "getModuleService",
+						throwException = true,
+						throwType      = "NoModules",
+						throwMessage   = "module service unavailable"
+					);
+					capture.$property( propertyName = "coldbox", mock = broken );
+
+					capture.captureException( newExceptionInfo() );
+
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "reports one exception once per request", function(){
+					capture.captureException( newExceptionInfo() );
+					capture.captureException( newExceptionInfo() );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1, "the second report is dropped" );
+				} );
+
+				it( "still reports exceptions that differ only by line", function(){
+					capture.captureException( newExceptionInfo( line = 1 ) );
+					capture.captureException( newExceptionInfo( line = 2 ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 2 );
+				} );
+
+				it( "does nothing while another capture is in progress", function(){
+					request._errorAlertsCapturing = true;
+					try {
+						capture.captureException( newExceptionInfo() );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+						expect( request.keyExists( "_errorAlertsCapturing" ) ).toBeTrue( "the flag stays set until the capture already in progress finishes" );
+					} finally {
+						structDelete( request, "_errorAlertsCapturing" );
+					}
+				} );
+
+				it( "ignores exception types used for aborts and redirects on every engine", function(){
+					capture.captureException( newAbortInfo( "coldfusion.runtime.AbortException" ) );
+					capture.captureException( newAbortInfo( "lucee.runtime.exp.Abort" ) );
+					capture.captureException( newAbortInfo( "ortus.boxlang.runtime.types.exceptions.AbortException" ) );
+					capture.captureException( newAbortInfo( "abort" ) );
+					capture.captureException( {
+						type      : "coldfusion.runtime.EventHandlerException",
+						message   : "Event Handler Exception.",
+						detail    : "",
+						rootCause : newAbortInfo( "coldfusion.runtime.AbortException" )
+					} );
+					capture.captureException( {
+						type    : "java.lang.RuntimeException",
+						message : "wrapped abort",
+						detail  : "",
+						cause   : newAbortInfo( "lucee.runtime.exp.Abort" )
+					} );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				} );
+
+				it( "reports errors whose type contains abort but is not an abort type", function(){
+					capture.captureException( newAbortInfo( "MyApp.AbortedOrder" ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "unwraps Adobe's EventHandlerException wrapper", function(){
+					capture.$( "capture" );
+					var real = newExceptionInfo();
+
+					capture.captureException( {
+						type      : "coldfusion.runtime.EventHandlerException",
+						message   : "Event Handler Exception.",
+						detail    : "",
+						rootCause : real
+					} );
+
+					var logEvent = capture.$callLog().capture[ 1 ][ 1 ];
+					expect( logEvent.getExtraInfo() ).toBe( real, "capture() receives the original exception" );
+					expect( logEvent.getMessage() ).toInclude( "Fixture explosion" );
+				} );
+
+				it( "keeps an ordinary exception unchanged when it has a rootCause", function(){
+					capture.$( "capture" );
+					var info      = newExceptionInfo();
+					info.type     = "Database";
+					info.rootCause = { type : "java.sql.SQLException", message : "driver detail" };
+
+					capture.captureException( info );
+
+					expect( capture.$callLog().capture[ 1 ][ 1 ].getExtraInfo().type ).toBe( "Database" );
+				} );
+
+				it( "reports an exception with no message key without throwing", function(){
+					expect( function(){
+						capture.captureException( { type : "Weird" } );
+					} ).notToThrow();
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "accepts a simple value without throwing", function(){
+					expect( function(){
+						capture.captureException( "just text" );
+					} ).notToThrow();
+				} );
+			} );
+
+			it( "leaves the snapshot route blank when the request service fails", function(){
 				makePublic( capture, "buildSnapshot" );
 
 				var broken = createStub();
@@ -229,6 +405,23 @@ component extends="tests.resources.BaseUnitSpec" {
 				} ).notToThrow();
 			} );
 		} );
+	}
+
+	/**
+	 * newAbortInfo
+	 *
+	 * Builds a test exception struct for an abort passed to onError().
+	 *
+	 * @type The engine's abort exception type name.
+	 */
+	private struct function newAbortInfo( required string type ){
+		return {
+			type       : arguments.type,
+			message    : "",
+			detail     : "",
+			stacktrace : "",
+			tagContext : []
+		};
 	}
 
 }

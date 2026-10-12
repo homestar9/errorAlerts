@@ -48,6 +48,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	}
 
 	/**
+	 * resetRequestState
+	 *
+	 * Clears the request keys that track reported errors and a capture in progress.
+	 * All specs in a run share one request. Without this reset, captureException()
+	 * could skip a test error because an earlier spec already reported the same error.
+	 */
+	function resetRequestState(){
+		structDelete( request, "_errorAlertsReported" );
+		structDelete( request, "_errorAlertsCapturing" );
+	}
+
+	/**
 	 * newExceptionInfo
 	 *
 	 * Builds exception data for the unhandled-exception tests.

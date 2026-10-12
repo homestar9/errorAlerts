@@ -86,6 +86,19 @@ component {
 				/* Keep this override partial to test that module startup restores rc,
 				 * cgi, and extraInfo defaults. session keeps its normal false value. */
 				includeScopes : { session : false },
+				/* This array replaces the default list, so include every default prefix.
+				 * Add /legacy/ so stack frames from pages outside ColdBox count as
+				 * application code. */
+				applicationFramePrefixes : [
+					"/handlers/",
+					"/models/",
+					"/views/",
+					"/layouts/",
+					"/config/",
+					"/interceptors/",
+					"/modules_app/",
+					"/legacy/"
+				],
 				/* The module ships with an empty maskKeys: masking is opt-in.
 				 * The harness opts in so the masking demo routes and the
 				 * integration specs have field names to hide. */

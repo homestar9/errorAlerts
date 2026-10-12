@@ -107,6 +107,46 @@ page and how to send its alert emails to a local SMTP server so you can read the
   payloads (`?directory=tests.specs.perf`). Run it before and after touching PayloadBuilder's
   sanitize path and compare against the numbers in the relevant commit messages.
 
+## Capture invariants
+
+- `CaptureService.captureException()` is the only public entry point for an unhandled exception.
+  The interceptor calls this method for ColdBox requests. An application's `Application.cfc`
+  `onError()` calls it directly for pages outside ColdBox. The method must never throw an exception
+  back to the caller. A failed alert must not stop the application from showing its error page.
+- The unhandled-exception LogEvent message (`Unhandled exception: #message# #detail#`) and the
+  `UnhandledException` category help identify matching errors for throttling. Changing either makes
+  existing errors count as new groups with new time windows for limiting alerts.
+- Call `hasColdBoxContext()` before reading request data through `getRequestService().getContext()`.
+  `getContext()` creates a context when none exists. The helper first checks that a context exists,
+  then checks for a non-empty `getCurrentEvent()`. Code outside ColdBox can create an empty context
+  by calling WireBox, so checking only for a context is not enough. Keep the helper's copies in
+  `PayloadBuilder` and `CaptureService` identical. Unit specs replace `PayloadBuilder` with a stub,
+  so `CaptureService` needs its own copy.
+- Keep the `settings.enabled` check in `capture()`. WireBox can create
+  `CaptureService@errorAlerts` even when `ModuleConfig.isActive()` did not register the appender
+  and interceptor. Direct calls must still respect the disabled setting. Keep the blank-`to` check
+  in `EmailNotifier` too.
+- The request key `_errorAlertsCapturing` prevents capture from running again while a capture is
+  already in progress. `_errorAlertsReported` tracks errors already reported in the request. Every
+  spec in a run shares one runner request. Specs that call `captureException()` must clear both
+  keys first. Integration specs use `BaseIntegrationSpec.resetRequestState()` to clear them.
+- Adobe puts errors from `Application.cfc` event methods inside an `EventHandlerException`, with
+  the original error in `rootCause`. Adobe can also pass an abort to `onError()`. Lucee and BoxLang
+  handle aborts elsewhere and use `cause` instead of `rootCause`. Only remove the
+  `EventHandlerException` wrapper. A `rootCause` key alone does not mean the error is wrapped;
+  ordinary Adobe database and Java exceptions have that key too.
+- `captureException()` calls `getModuleService().loadMappings()` before it captures. On Lucee
+  and BoxLang, CFML module mappings last one request. These mappings tell CFML where module code
+  lives. ColdBox reloads them in `Bootstrap.onRequestStart()`. If `onError()` runs before that
+  method, as in the harness's `startFail` scenario, the `cbmailservices` mapping is missing.
+  The first attempt to build `Mail@cbmailservices` fails. WireBox then reports "Instance not found"
+  for later attempts until the application is reinitialized. Adobe keeps mappings for the whole
+  application and does not have this problem. Keep the reload call. If you change it, run the legacy
+  scenarios on Lucee or BoxLang, starting with `startFail.cfm`.
+- Adobe cannot parse a member call on a parenthesized expression such as
+  `( a ? b : c ).left( 200 )`. Adobe reports this as a named-parameter error. Assign the expression's
+  result to a variable first, then call the method on that variable.
+
 ## Email rendering invariants
 
 `models/EmailRenderer.cfc` builds the whole email as concatenated strings. There are no views.

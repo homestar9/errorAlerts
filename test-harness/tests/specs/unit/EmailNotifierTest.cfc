@@ -78,6 +78,14 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( captured.subject ).toInclude( "97" );
 			} );
 
+			it( "sends nothing when `to` is blank", function(){
+				settings.to = "";
+				expect( function(){
+					notifier.sendNotification( newErrorPayload() );
+				} ).notToThrow();
+				expect( mailServiceStub.$count( "newMail" ) ).toBe( 0, "no mail object is created" );
+			} );
+
 			it( "swallows mail failures instead of throwing into the request", function(){
 				var brokenMailService = createStub();
 				brokenMailService.$(

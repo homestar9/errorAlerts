@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-12
+
+### Added
+
+- `CaptureService.captureException( exception )` reports an exception from code
+  that runs outside ColdBox, such as an `Application.cfc` `onError()` method for
+  an older folder that shares the ColdBox application. The method checks ignore
+  lists, limits repeated alerts, hides values selected by the masking settings,
+  and calls the notifier.
+  Repeated errors can appear in a digest email for the same time window. The
+  method never throws an exception back to the caller. It ignores aborts and
+  redirects, reports the original error from Adobe's `EventHandlerException`
+  wrapper, and prevents duplicate reports of the same error within a request.
+  On Lucee and BoxLang, the method reloads module mappings before reporting an
+  error. If `onError()` runs before ColdBox starts handling the request, those
+  mappings are missing. Without them, the first mail build fails and later
+  alerts fail until the application is reinitialized. See "Pages outside
+  ColdBox" in the README for the `onError()` example. The module's interceptor
+  now calls this method too.
+- The test harness has a "Legacy pages (outside ColdBox)" group of plain `.cfm`
+  files under `test-harness/legacy/`. The harness's `Application.cfc` `onError()`
+  method reports errors from these files.
+
+### Changed
+
+- Alerts from outside ColdBox, such as legacy pages, scheduled tasks, and
+  threads, show one `coldbox` row with "not a ColdBox request" instead of nine
+  `N/A` routing rows. For web requests, the request collection (`rc`) combines
+  `FORM` and `URL` values and applies `maskKeys`. Building an alert no longer
+  creates a ColdBox request context.
+- `CaptureService.capture()` checks `enabled` each time it runs. WireBox can
+  create the service even when the module did not register its appender and
+  interceptor. This check prevents direct calls from sending alerts when the
+  module is disabled.
+- `EmailNotifier` sends no email when `to` is blank. It prints a console warning
+  once.
+- Digest emails list the page path for errors from web requests outside ColdBox.
+
 ## [2.6.0] - 2026-08-11
 
 ### Added
