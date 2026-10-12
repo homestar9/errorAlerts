@@ -141,6 +141,20 @@ masking is opt-in — so the harness opts in through its own `moduleSettings` in
 [config/Coldbox.cfc](../test-harness/config/Coldbox.cfc); that list is what the
 masking routes and the TestBox specs rely on.
 
+**Legacy pages (outside ColdBox)** are plain `.cfm` files under
+`test-harness/legacy/`, not Trigger actions. `Bootstrap.onRequestStart()` only
+runs ColdBox for `index.cfm`, so these pages run as ordinary CFML and their
+exceptions reach `Application.cfc` `onError()`, which calls
+`CaptureService.captureException()`. That is the recipe the README gives for a
+legacy folder that shares the ColdBox application. The harness config adds
+`/legacy/` to `applicationFramePrefixes` so those frames count as application
+code. `startFail.cfm` makes `onRequestStart()` throw, which on Adobe arrives at
+`onError()` wrapped in an `EventHandlerException`; the alert must name
+`Harness.StartFail`, not the wrapper. `abortPage.cfm` calls `location()` then
+`abort` and must send nothing on any engine. The alert for a legacy page shows a
+`coldbox` row reading "not a ColdBox request" in place of the routing rows, and
+its rc section is the merged form and url scopes.
+
 ## What a run on Adobe 2023 showed
 
 Findings from firing the whole catalog, worth knowing before you read your own
@@ -227,6 +241,9 @@ Two edits:
    `test-harness/views/main/index.cfm`. Set `alerts : false` when no email is
    expected, `skipAll : true` to leave it out of the sweep, and `method : "POST"`
    to render it as a form button instead of a link.
+
+A scenario that must run outside ColdBox is a file under `test-harness/legacy/`
+instead of a Trigger action. Add the file, then add its path to the legacy group.
 
 ## Running the specs
 

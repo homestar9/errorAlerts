@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CaptureService.captureException( exception )` reports an exception from code
+  that runs outside ColdBox, such as an `Application.cfc` `onError()` method for
+  a legacy folder that shares the ColdBox application. It runs the normal
+  pipeline: the ignore lists, throttling and digests, masking, and the notifier.
+  It never throws, it ignores abort and relocate pseudo-exceptions, it unwraps
+  Adobe's `EventHandlerException` wrapper, and it reports one exception once per
+  request. On Lucee and BoxLang it reloads the module mappings first, because an
+  `onError()` that runs before ColdBox's request start has none, and the first
+  failed mail build would otherwise stop every later alert until a reinit. The
+  README section "Pages outside ColdBox" has the `onError()` recipe. The
+  module's own interceptor now uses the same method.
+- The test harness has a "Legacy pages (outside ColdBox)" group of plain `.cfm`
+  files under `test-harness/legacy/`, reported through the harness
+  `Application.cfc` `onError()`.
+
+### Changed
+
+- An alert for a request that ColdBox did not route, which includes legacy
+  pages, scheduled tasks, and threads, shows one `coldbox` row reading "not a
+  ColdBox request" instead of nine `N/A` routing rows. Its request collection
+  is the merged `FORM` and `URL` scopes with `maskKeys` applied. Building an
+  alert no longer creates a ColdBox request context as a side effect.
+- `CaptureService.capture()` checks `enabled` at run time. WireBox can create
+  the service when the module declined to register its appender and
+  interceptor, and a direct caller must not send alerts in that state.
+- `EmailNotifier` sends nothing, and warns once on the console, when `to` is
+  blank.
+- A digest lists the page path for an occurrence outside ColdBox.
+
 ## [2.6.0] - 2026-08-11
 
 ### Added

@@ -28,10 +28,25 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	 * Mail failures go to System.err. They cannot break the request or create
 	 * another LogBox error.
 	 *
+	 * A blank recipient sends nothing. Module load already refuses to register
+	 * the appender and interceptor in that case, but a direct captureException()
+	 * caller can still reach this notifier. The warning prints once so an
+	 * onError() hook does not write a line for every error.
+	 *
 	 * @payload The payload struct from PayloadBuilder.
 	 */
 	void function sendNotification( required struct payload ){
 		try {
+			if ( !settings.to.trim().len() ) {
+				if ( !variables.keyExists( "warnedBlankTo" ) ) {
+					variables.warnedBlankTo = true;
+					variables.system.err.println(
+						"errorAlerts: setting `to` is blank, so no alert email was sent."
+					);
+				}
+				return;
+			}
+
 			var mail = mailService.newMail(
 				to      = settings.to,
 				from    = settings.from.trim().len() ? settings.from : settings.to,

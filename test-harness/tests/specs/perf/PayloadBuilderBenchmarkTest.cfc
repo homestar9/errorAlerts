@@ -227,6 +227,7 @@ component extends="tests.resources.BaseUnitSpec" {
 		eventStub.$( "getCollection", arguments.rc );
 
 		var requestServiceStub = createStub();
+		requestServiceStub.$( "contextExists", true );
 		requestServiceStub.$( "getContext", eventStub );
 
 		var controllerStub = createStub();

@@ -116,6 +116,53 @@ component {
 
 Passing the caught exception as `extraInfo` lets the alert include its type, detail, and stack frames.
 
+### Pages outside ColdBox
+
+A site may have oneor more legacy folders next to its ColdBox application, such as an older `/admin/` area that never enters ColdBox's request lifecycle. ColdBox never sees those exceptions, so neither does errorAlerts. When the legacy folder shares the CFML application (the same `this.name`, so `application.cbController` exists during its requests), report them from `Application.cfc`:
+
+```cfc
+function onError( required any exception, string eventName = "" ){
+    try {
+        var reinitInProgress = structKeyExists( application, "fwReinit" ) && application.fwReinit;
+        if ( !reinitInProgress && structKeyExists( application, "cbController" ) ) {
+            application.cbController
+                .getWireBox()
+                .getInstance( "CaptureService@errorAlerts" )
+                .captureException( arguments.exception );
+        }
+    } catch ( any e ) {
+        // The alert must never replace the error page.
+    }
+
+    cfheader( statusCode = 500 );
+    writeOutput( "<h1>Something went wrong</h1><p>The developers have been notified.</p>" );
+}
+```
+
+`captureException()` never throws, so it is safe inside `onError()`. It runs the same pipeline as a ColdBox exception: the ignore lists, throttling and digests, masking, and the configured notifier.
+
+Points to know:
+
+- `onError()` must live in the `Application.cfc` that handles the legacy requests. A subfolder `Application.cfc` only has it when it extends or includes the root one.
+- ColdBox handles its own request exceptions before they can reach `onError()`. If one exception is reported by both paths in one request, one email is sent.
+- Add the legacy folder to `applicationFramePrefixes`, repeating the defaults, so its frames count as application code and group errors by call site:
+
+  ```cfc
+  applicationFramePrefixes : [
+      "/handlers/", "/models/", "/views/", "/layouts/",
+      "/config/", "/interceptors/", "/modules_app/",
+      "/admin/"
+  ]
+  ```
+
+- The email shows a `coldbox` row reading "not a ColdBox request" instead of the event and route rows. The request collection is the merged `FORM` and `URL` scopes, with `maskKeys` applied.
+- Aborts and `location()` calls that an engine passes to `onError()` are ignored. Adobe wraps an exception thrown inside `onRequest()` or `onRequestStart()`; the module unwraps it.
+- Lucee and BoxLang keep the CFML mappings that ColdBox modules declare for one request only. An `onError()` that runs before ColdBox's own request start, for example after your `onRequestStart()` threw, would have no module mappings. `captureException()` reloads them first, so no change is needed in your code.
+- `enabled` and the environment overrides still apply. A `development()` override that disables the module also silences legacy pages.
+- A `userProvider` closure runs outside ColdBox here. If it depends on a ColdBox request, for example through cbauth, it may fail, and the `user` row shows `emptyValueText`.
+- Keep `deliveryMode` at `queue`. An `onError()` that runs after a request timeout may have little time left.
+- A legacy application with a different `this.name` has no shared WireBox and is not supported.
+
 ## How throttling works
 
 The module groups errors by LogBox category, the first 200 message characters, the top stack frame, and the first application stack frame. It replaces numbers and UUIDs in messages by default. For example, `Order 123 failed` and `Order 456 failed` belong to the same group.
@@ -457,6 +504,13 @@ Check these items in order:
 
 Mail delivery failures are intentionally prevented from breaking the original request. They are written to standard error instead of being thrown back into your application.
 
+### Legacy page errors send nothing
+
+1. Confirm that `Application.cfc` defines `onError()` as shown in [Pages outside ColdBox](#pages-outside-coldbox), and that the legacy folder's own `Application.cfc`, if it has one, extends or includes it.
+2. Confirm that the legacy pages share the ColdBox application. `application.cbController` must exist during a legacy request.
+3. An abort or `location()` is not an error and is never reported.
+4. Check your server console or standard-error log for a line beginning with `errorAlerts captureException failed`.
+
 ### The first email arrives, but later ones do not
 
 This is usually throttling. The first three matching errors send immediately; the rest appear in a digest after the window closes.
@@ -471,7 +525,7 @@ Pending throttle data lives only in memory. Restarting or reinitializing the app
 
 ## How it works
 
-The module adds an appender to ColdBox's root LogBox logger and registers an `onException` interceptor. Both use the same capture process. The process applies ignore rules, groups matching errors, throttles repeats, sanitizes the payload, and calls the notifier. Internal failures do not escape into the original request.
+The module adds an appender to ColdBox's root LogBox logger and registers an `onException` interceptor. Both use the same capture process, and so does `captureException()`, the entry point for pages outside ColdBox. The process applies ignore rules, groups matching errors, throttles repeats, sanitizes the payload, and calls the notifier. Internal failures do not escape into the original request.
 
 ## Custom notifiers
 

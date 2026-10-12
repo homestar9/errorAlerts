@@ -120,9 +120,65 @@ component {
 			pagePoolClear();
 		}
 
+		/* The startFail legacy scenario throws here, inside an Application.cfc
+		 * event method. Adobe wraps such an exception before onError() sees it,
+		 * so this is the path that proves the module unwraps it. */
+		if ( arguments.targetPage.findNoCase( "/legacy/startFail.cfm" ) ) {
+			throw(
+				type    = "Harness.StartFail",
+				message = "Thrown from onRequestStart for a legacy page",
+				detail  = "Adobe delivers this to onError() wrapped in an EventHandlerException."
+			);
+		}
+
 		application.cbBootstrap.onRequestStart( arguments.targetPage );
 
 		return true;
+	}
+
+	/**
+	 * onError
+	 *
+	 * Reports exceptions from pages that run outside ColdBox, such as the
+	 * legacy scenarios, then renders a short error page. ColdBox handles its
+	 * own request exceptions before they can reach this method. This is the
+	 * recipe the README documents for a legacy folder that shares the
+	 * application.
+	 *
+	 * @exception The exception the engine passed to onError().
+	 * @eventName The Application.cfc method that was running, or an empty string.
+	 */
+	public void function onError( required any exception, string eventName = "" ) output="true"{
+		try {
+			var reinitInProgress = structKeyExists( application, "fwReinit" ) && application.fwReinit;
+			if ( !reinitInProgress && structKeyExists( application, "cbController" ) ) {
+				application.cbController
+					.getWireBox()
+					.getInstance( "CaptureService@errorAlerts" )
+					.captureException( arguments.exception );
+			}
+		} catch ( any e ) {
+			// The alert must never replace the error page.
+		}
+
+		try {
+			cfheader( statusCode = 500 );
+		} catch ( any e ) {
+		}
+
+		var type = "";
+		try {
+			type = arguments.exception.type;
+		} catch ( any e ) {
+		}
+
+		writeOutput(
+			"<h1>Harness error page (outside ColdBox)</h1>" &
+			"<p>Application.cfc onError() caught <code>#encodeForHtml( type )#</code>" &
+			"#( len( arguments.eventName ) ? " while running <code>" & encodeForHtml( arguments.eventName ) & "</code>" : "" )#" &
+			" and asked errorAlerts to report it.</p>" &
+			"<p><a href=""/main/lastMail"">Read the alert</a> or <a href=""/"">return to the catalog</a>.</p>"
+		);
 	}
 
 	/**

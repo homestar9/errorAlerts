@@ -48,6 +48,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	}
 
 	/**
+	 * resetRequestState
+	 *
+	 * Clears the per-request state that captureException() keeps.
+	 * Every spec in a run shares one runner request, so a fixture reported by an
+	 * earlier spec would otherwise be dropped as a duplicate.
+	 */
+	function resetRequestState(){
+		structDelete( request, "_errorAlertsReported" );
+		structDelete( request, "_errorAlertsCapturing" );
+	}
+
+	/**
 	 * newExceptionInfo
 	 *
 	 * Builds exception data for the unhandled-exception tests.

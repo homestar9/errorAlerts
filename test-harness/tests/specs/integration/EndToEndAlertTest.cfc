@@ -13,6 +13,7 @@ component extends="tests.resources.BaseIntegrationSpec" {
 			beforeEach( function(){
 				resetThrottle();
 				clearMailbox();
+				resetRequestState();
 			} );
 
 			it( "emails a manual logger.error() call", function(){
@@ -59,6 +60,54 @@ component extends="tests.resources.BaseIntegrationSpec" {
 				expect( mailbox[ 1 ].body ).toInclude( "interceptor boom" );
 				expect( mailbox[ 1 ].body ).toInclude( "Main.cfc" );
 				expect( mailbox[ 1 ].body ).toInclude( "origin", "the request section always names the origin" );
+			} );
+
+			it( "emails an exception reported from outside ColdBox", function(){
+				var requestService = getController().getRequestService();
+				requestService.removeContext();
+				url[ "password" ] = "legacy-secret";
+
+				try {
+					getInstance( "CaptureService@errorAlerts" ).captureException( newExceptionInfo( "legacy boom" ) );
+
+					var mailbox = getMailbox();
+					expect( mailbox.len() ).toBe( 1 );
+					expect( mailbox[ 1 ].subject ).toInclude( "Unhandled exception" );
+					expect( mailbox[ 1 ].body ).toInclude( "legacy boom" );
+					expect( mailbox[ 1 ].body ).toInclude(
+						"not a ColdBox request",
+						"the request section says ColdBox did not route it"
+					);
+					expect( mailbox[ 1 ].body ).notToInclude( "routePattern", "routing rows are left out" );
+					// The renderer HTML-escapes the asterisks in the mask token, so match the word.
+					expect( mailbox[ 1 ].body ).toInclude( "masked", "the url scope is masked like rc" );
+					expect( mailbox[ 1 ].body ).notToInclude( "legacy-secret" );
+					expect( requestService.contextExists() ).toBeFalse( "capturing must not create a request context" );
+				} finally {
+					structDelete( url, "password" );
+				}
+			} );
+
+			it( "sends one email when onException and onError report the same exception", function(){
+				var info = newExceptionInfo( "double report boom" );
+
+				getController().getInterceptorService().announce( "onException", { exception : info } );
+				getInstance( "CaptureService@errorAlerts" ).captureException( info );
+
+				expect( getMailbox().len() ).toBe( 1, "one exception is reported once per request" );
+			} );
+
+			it( "sends nothing while the module is disabled", function(){
+				var live = getController().getSetting( "moduleSettings" ).errorAlerts;
+				live.enabled = false;
+
+				try {
+					getInstance( "CaptureService@errorAlerts" ).captureException( newExceptionInfo( "disabled boom" ) );
+					getController().getLogBox().getLogger( "integrationTest" ).error( "disabled log boom" );
+					expect( getMailbox() ).toBeEmpty();
+				} finally {
+					live.enabled = true;
+				}
 			} );
 
 			it( "sends one email when RestHandler logs and announces the same exception", function(){
