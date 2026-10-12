@@ -3,10 +3,10 @@
  *
  * Converts a LogBox event and available request data into a plain struct.
  *
- * A request that ColdBox routed provides its event, routing rows, and request
- * collection. A request outside ColdBox, such as a legacy page in the same
- * application, provides one marker row and the merged FORM and URL scopes
- * instead. An event outside any web request leaves those sections empty.
+ * A ColdBox request provides its event, routing details, and request collection.
+ * A web request outside ColdBox provides a "not a ColdBox request" row instead
+ * of routing details. Its request collection combines FORM and URL fields.
+ * Events outside web requests have no FORM or URL fields to include.
  */
 component singleton accessors="true" {
 
@@ -560,9 +560,9 @@ component singleton accessors="true" {
 	 * Missing request values use settings.emptyValueText. The user and sessionId
 	 * rows only appear when their features are active.
 	 *
-	 * A request that ColdBox did not route gets one `coldbox` row instead of the
-	 * routing rows. A request service that fails keeps every routing row with a
-	 * placeholder, so a broken context is visible in the email.
+	 * A request outside ColdBox gets one coldbox row instead of routing rows.
+	 * If reading the request context fails, keep the routing rows and fill any
+	 * missing values with placeholders. This shows the failure in the email.
 	 *
 	 * @exception The already-built exception struct, used to find the origin.
 	 */
@@ -596,7 +596,7 @@ component singleton accessors="true" {
 				// Record whether the caller was an Ajax request.
 				addValue( info, "isAjax", event.isAjax() ? "yes" : "no" );
 			} else {
-				// A legacy page or a background thread. The routing rows would all be empty.
+				// Requests outside ColdBox have no routing details to show.
 				addValue( info, "coldbox", "not a ColdBox request" );
 			}
 		} catch ( any e ) {
@@ -1234,9 +1234,9 @@ component singleton accessors="true" {
 	 * buildRc
 	 *
 	 * Returns a sanitized request collection.
-	 * A request that ColdBox routed uses its collection. A request outside
-	 * ColdBox uses the merged FORM and URL scopes, which is what ColdBox would
-	 * have captured. Returns an empty struct on failure.
+	 * Use the ColdBox request collection when available. For a web request
+	 * outside ColdBox, combine FORM and URL fields as ColdBox would.
+	 * Return an empty struct if the collection cannot be built.
 	 */
 	private struct function buildRc(){
 		try {
@@ -1254,10 +1254,11 @@ component singleton accessors="true" {
 	 * hasColdBoxContext
 	 *
 	 * Checks whether ColdBox routed the current request.
-	 * getContext() creates a context when none exists, so it is never called
-	 * before this check. A context with no event name was created by a direct
-	 * WireBox call from code outside ColdBox and does not count. Keep this
-	 * method in step with the copy in CaptureService.
+	 * Check contextExists() before calling getContext(), because getContext()
+	 * creates a context if one is missing. Then check for a non-empty event name.
+	 * Code outside ColdBox can create an empty context by calling WireBox.
+	 * That empty context does not count as a ColdBox request. Keep this method
+	 * identical to the copy in CaptureService.
 	 */
 	private boolean function hasColdBoxContext(){
 		var requestService = coldbox.getRequestService();
@@ -1271,12 +1272,12 @@ component singleton accessors="true" {
 	 * scopeCollection
 	 *
 	 * Returns the merged FORM and URL scopes for a request outside ColdBox.
-	 * URL values replace FORM values, the same order ColdBox's requestCapture()
-	 * uses. Outside a web request, such as a scheduled task or a thread, the
-	 * scopes carry nothing useful, so the result is empty.
+	 * URL values replace FORM values with the same key, as in ColdBox's
+	 * requestCapture(). Return an empty struct when there is no web request,
+	 * such as for a scheduled task or a background thread.
 	 *
-	 * A separate method lets tests supply a collection without changing the
-	 * runner's own scopes.
+	 * Keep this in a separate method so tests can supply fields without changing
+	 * the test runner's FORM and URL scopes.
 	 */
 	private struct function scopeCollection(){
 		var collection = {};

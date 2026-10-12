@@ -50,9 +50,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 	/**
 	 * resetRequestState
 	 *
-	 * Clears the per-request state that captureException() keeps.
-	 * Every spec in a run shares one runner request, so a fixture reported by an
-	 * earlier spec would otherwise be dropped as a duplicate.
+	 * Clears the request keys that track reported errors and a capture in progress.
+	 * All specs in a run share one request. Without this reset, captureException()
+	 * could skip a test error because an earlier spec already reported the same error.
 	 */
 	function resetRequestState(){
 		structDelete( request, "_errorAlertsReported" );

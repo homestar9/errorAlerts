@@ -7,7 +7,7 @@
  *
  * captureException() is the public entry point for unhandled exceptions. The
  * interceptor uses it for ColdBox requests. Code outside ColdBox, such as an
- * Application.cfc onError() method in a legacy folder of the same application,
+ * Application.cfc onError() method for older pages in the same application,
  * can call it directly.
  */
 component singleton accessors="true" {
@@ -28,10 +28,10 @@ component singleton accessors="true" {
 	function init(){
 		variables.system = createObject( "java", "java.lang.System" );
 
-		// Limit the per-request dedupe registry so a looping onError cannot grow it.
+		// Store keys for at most 50 reported errors per request, even if onError() runs in a loop.
 		variables.MAX_REPORTED_PER_REQUEST = 50;
 
-		// Matches the abort pseudo-exception type on every supported engine.
+		// Match the exception types that engines use for aborts and redirects.
 		variables.ABORT_TYPE_PATTERN = "(^|\.)Abort(Exception)?$";
 
 		return this;
@@ -43,10 +43,10 @@ component singleton accessors="true" {
 	 * Checks, throttles, and sends one log event.
 	 * Also sends a digest when this event closes an expired throttle window.
 	 *
-	 * The enabled check runs here as well as at module load. WireBox can create
-	 * this service when the module declined to register its appender and
-	 * interceptor, for example under a development() override, and a direct
-	 * caller must not send alerts in that state.
+	 * Check enabled each time this method runs, not just when the module loads.
+	 * WireBox can create this service even when the module did not register its
+	 * appender and interceptor. For example, a development() override may disable
+	 * the module. Direct calls must still respect that setting.
 	 *
 	 * @logEvent The LogBox LogEvent to process.
 	 */
@@ -85,20 +85,20 @@ component singleton accessors="true" {
 	/**
 	 * captureException
 	 *
-	 * Reports one unhandled exception through the normal capture pipeline.
-	 * This is the public entry point for Application.cfc onError() methods and
-	 * for the module's own interceptor. It never throws, because it runs inside
-	 * error handling.
+	 * Reports an unhandled exception by passing it to capture().
+	 * Application.cfc onError() methods and the module's interceptor call this
+	 * method. It never throws an exception back to the caller because a failed
+	 * alert must not stop the application's error handler.
 	 *
 	 * Adobe wraps an exception thrown inside an Application.cfc event method in
-	 * an EventHandlerException. The wrapper is removed so the email, the
-	 * signature, and the dedupe all see the real exception. Abort and relocate
-	 * pseudo-exceptions are ignored because they are not errors.
+	 * an EventHandlerException. Use the original exception for the email and
+	 * for checks that group matching errors or prevent duplicate reports.
+	 * Ignore aborts and redirects because they are not errors.
 	 *
-	 * One exception is reported once per request. An exception handler that
-	 * rethrows the original exception into onError() cannot send a second email.
-	 * The request flag prevents an exception during capture from calling this
-	 * method again.
+	 * Track reported errors to prevent a second report of the same exception
+	 * within a request. This covers a handler that rethrows an exception already
+	 * reported by the interceptor, causing onError() to run. The request flag
+	 * prevents this method from running again while a capture is in progress.
 	 *
 	 * @exception The cfcatch struct or exception object to report.
 	 */
@@ -250,14 +250,14 @@ component singleton accessors="true" {
 	/**
 	 * ensureModuleMappings
 	 *
-	 * Reloads the CFML mappings that ColdBox modules declare.
-	 * Lucee and BoxLang keep mappings added at runtime for one request only, so
-	 * ColdBox reloads them at the start of every request. An onError() that runs
-	 * before that point, for example after onRequestStart() threw, has no
-	 * `cbmailservices` mapping. The first mail build would then fail, and WireBox
-	 * drops a mapping it cannot build, which stops every later alert until a
-	 * reinit. Adobe keeps mappings for the whole application, so the call is a
-	 * no-op there. A failure here is ignored; capture still runs.
+	 * Reloads the mappings that tell CFML where ColdBox module code lives.
+	 * Lucee and BoxLang keep mappings added at runtime for one request only.
+	 * ColdBox reloads them when it starts handling each request. If
+	 * onRequestStart() fails before ColdBox runs, onError() has no cbmailservices
+	 * mapping. The first mail build then fails, and WireBox removes the mail
+	 * object mapping after that failure. Later alerts fail until the application
+	 * is reinitialized. Adobe keeps mappings for the whole application, so the
+	 * reload is not needed there. If this reload fails, still try to capture.
 	 */
 	private void function ensureModuleMappings(){
 		try {
@@ -269,9 +269,10 @@ component singleton accessors="true" {
 	/**
 	 * newUnhandledEvent
 	 *
-	 * Converts an exception to the LogEvent the capture pipeline expects.
-	 * The message format and the category are part of every error signature.
-	 * Changing either one restarts every throttle window.
+	 * Converts an exception to the LogEvent that capture() accepts.
+	 * The message format and category help identify matching errors for throttling.
+	 * Changing either makes existing errors count as new groups with new time
+	 * windows for limiting alerts.
 	 *
 	 * @exception The cfcatch struct or exception object being reported.
 	 */
@@ -290,11 +291,11 @@ component singleton accessors="true" {
 	/**
 	 * unwrapHandlerException
 	 *
-	 * Returns the real exception from an Adobe EventHandlerException wrapper.
-	 * Adobe wraps an exception thrown inside onRequest() or onRequestStart()
-	 * before it reaches onError(). Only the wrapper is unwrapped. Other Adobe
-	 * exceptions also carry a rootCause, so that key alone is not a reason to
-	 * unwrap. Returns the original value when there is nothing to unwrap.
+	 * Returns the original exception from an Adobe EventHandlerException.
+	 * Adobe puts errors from onRequest() or onRequestStart() inside this wrapper
+	 * before passing them to onError(). Only remove this kind of wrapper.
+	 * Other Adobe exceptions also have rootCause, so that key alone does not
+	 * mean the error is wrapped. Return the input unchanged if no wrapper is found.
 	 *
 	 * @exception The cfcatch struct or exception object from onError().
 	 */
@@ -324,11 +325,11 @@ component singleton accessors="true" {
 	/**
 	 * isAbort
 	 *
-	 * Checks whether the exception is an engine abort or relocate signal.
+	 * Checks whether the exception represents an abort or redirect.
 	 * Adobe can pass coldfusion.runtime.AbortException to onError() after a
 	 * location() or abort inside onRequestStart(). Lucee and BoxLang handle
-	 * aborts separately, so the check is defensive there. The cause is checked
-	 * as well because a wrapper can carry the abort.
+	 * aborts separately, but their abort types are checked too. Also check the
+	 * cause in case another exception contains the abort.
 	 *
 	 * @exception The cfcatch struct or exception object to test.
 	 */
@@ -375,12 +376,12 @@ component singleton accessors="true" {
 	/**
 	 * requestFingerprint
 	 *
-	 * Returns a hash that identifies one exception within one request.
-	 * The raw type, message, detail, and top frame are used without the
-	 * normalization that SignatureService applies, so this check stays
-	 * independent of throttle grouping.
+	 * Returns a hash used to find duplicate reports within one request.
+	 * Use the exception's type, message, detail, and first stack frame unchanged.
+	 * SignatureService can replace numbers or UUIDs in messages; this method does not.
+	 * This keeps the duplicate check separate from the grouping of repeated alerts.
 	 *
-	 * @exception The cfcatch struct or exception object to fingerprint.
+	 * @exception The cfcatch struct or exception object to identify.
 	 */
 	private string function requestFingerprint( required any exception ){
 		var parts = [
@@ -395,7 +396,8 @@ component singleton accessors="true" {
 	/**
 	 * topFrameText
 	 *
-	 * Returns "template:line" for the first stack frame, or an empty string.
+	 * Returns the first stack frame's file path and line number as "template:line".
+	 * Returns an empty string if the frame cannot be read.
 	 *
 	 * @exception The cfcatch struct or exception object.
 	 */
@@ -418,9 +420,12 @@ component singleton accessors="true" {
 	/**
 	 * fieldText
 	 *
-	 * Reads one simple field from an exception as text, or returns an empty
-	 * string. A Java exception can hold a null message, and reading it directly
-	 * throws on some engines. Reading through this method cannot lose an alert.
+	 * Reads an exception field, such as message or detail, as text.
+	 * Returns an empty string if the field is missing, null, or cannot be read.
+	 * Values that isSimpleValue() rejects, such as arrays or structs, also return
+	 * an empty string.
+	 * Reading a null Java exception message directly throws on some engines.
+	 * Returning an empty string lets the alert still report the other fields.
 	 *
 	 * @source The cfcatch struct or exception object.
 	 * @key    The field to read.
@@ -446,7 +451,7 @@ component singleton accessors="true" {
 	 * Returns true for a struct or object that can hold exception fields.
 	 * Adobe cfcatch values can be objects instead of structs.
 	 *
-	 * @value The value to test, any type.
+	 * @value A value of any type to check.
 	 */
 	private boolean function isExceptionLike( required any value ){
 		return isObject( arguments.value ) || isStruct( arguments.value );
@@ -456,10 +461,11 @@ component singleton accessors="true" {
 	 * hasColdBoxContext
 	 *
 	 * Checks whether ColdBox routed the current request.
-	 * getContext() creates a context when none exists, so it is never called
-	 * before this check. A context with no event name was created by a direct
-	 * WireBox call from code outside ColdBox and does not count. Keep this
-	 * method in step with the copy in PayloadBuilder.
+	 * Check contextExists() before calling getContext(), because getContext()
+	 * creates a context if one is missing. Then check for a non-empty event name.
+	 * Code outside ColdBox can create an empty context by calling WireBox.
+	 * That empty context does not count as a ColdBox request. Keep this method
+	 * identical to the copy in PayloadBuilder.
 	 */
 	private boolean function hasColdBoxContext(){
 		var requestService = coldbox.getRequestService();
@@ -474,8 +480,8 @@ component singleton accessors="true" {
 	 *
 	 * Returns the event details needed for a later digest.
 	 * The route and client address help show whether failures came from one page
-	 * or many requests. A page outside ColdBox uses its path as the route. A
-	 * failure while reading either value leaves it blank.
+	 * or many requests. A page outside ColdBox uses its file path as the route.
+	 * If a value cannot be read, that value stays blank.
 	 *
 	 * @logEvent The LogBox LogEvent being recorded.
 	 */
@@ -495,7 +501,7 @@ component singleton accessors="true" {
 				var route      = event.getCurrentRoutedUrl();
 				snapshot.route = toString( route.len() ? route : event.getCurrentEvent() ).left( 200 );
 			} else if ( cgi.request_method.trim().len() ) {
-				// On IIS path_info can repeat script_name, so use one or the other.
+				// Use path_info if present, otherwise script_name. On IIS they can be the same path.
 				var path       = cgi.path_info.trim().len() ? cgi.path_info : cgi.script_name;
 				snapshot.route = toString( path ).left( 200 );
 			}

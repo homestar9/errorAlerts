@@ -390,7 +390,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.request ).toHaveKey( "forwardedFor" );
 			} );
 
-			it( "describes a request outside ColdBox and builds rc from the form and url scopes", function(){
+			it( "describes a request outside ColdBox and builds its request collection from FORM and URL", function(){
 				var controllerStub = newControllerStub( hasContext = false );
 				builder.$property( propertyName = "coldbox", mock = controllerStub );
 				builder.$( "scopeCollection", { password : "hunter2", orderId : 88213 } );
@@ -402,8 +402,8 @@ component extends="tests.resources.BaseUnitSpec" {
 					expect( payload.request ).notToHaveKey( key, "routing rows are left out instead of printing N/A" );
 				}
 				expect( payload.request ).toHaveKey( "origin" );
-				expect( payload.request ).toHaveKey( "method", "cgi rows still appear" );
-				expect( payload.rc.password ).toBe( "*** masked ***", "maskKeys apply to the scope fallback" );
+				expect( payload.request ).toHaveKey( "method", "the request still includes the HTTP method from CGI" );
+				expect( payload.rc.password ).toBe( "*** masked ***", "maskKeys also hides matching values collected from FORM and URL" );
 				expect( payload.rc.orderId ).toBe( "88213" );
 				expect( controllerStub.getRequestService().$count( "getContext" ) ).toBe(
 					0,
@@ -412,7 +412,7 @@ component extends="tests.resources.BaseUnitSpec" {
 			} );
 
 			it( "treats a context with no event name as a request outside ColdBox", function(){
-				// Legacy code that calls WireBox can create an empty context as a side effect.
+				// Calling WireBox from outside ColdBox can create a context with no event name.
 				builder.$property( propertyName = "coldbox", mock = newControllerStub( currentEvent = "" ) );
 				builder.$( "scopeCollection", { orderId : 1 } );
 
@@ -423,7 +423,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.rc.orderId ).toBe( "1" );
 			} );
 
-			it( "merges the form and url scopes with url winning, like ColdBox requestCapture", function(){
+			it( "combines FORM and URL fields, with URL values replacing FORM values as in ColdBox requestCapture", function(){
 				makePublic( builder, "scopeCollection" );
 				form[ "eaProbe" ]    = "from-form";
 				url[ "eaProbe" ]     = "from-url";
@@ -888,9 +888,9 @@ component extends="tests.resources.BaseUnitSpec" {
 	 * The event stub implements every context method used by PayloadBuilder.
 	 *
 	 * @rc           The request collection the stubbed context returns.
-	 * @hasContext   What the stubbed request service reports from contextExists().
-	 * @currentEvent The event name the stubbed context reports. An empty value
-	 *               models a context that exists but was never routed by ColdBox.
+	 * @hasContext   The value returned by the stub's contextExists() method.
+	 * @currentEvent The event name returned by the stubbed context. An empty value
+	 *               represents a context for a request outside ColdBox.
 	 */
 	private any function newControllerStub(
 		struct rc = {},

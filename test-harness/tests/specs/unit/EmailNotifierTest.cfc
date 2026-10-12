@@ -83,7 +83,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( function(){
 					notifier.sendNotification( newErrorPayload() );
 				} ).notToThrow();
-				expect( mailServiceStub.$count( "newMail" ) ).toBe( 0, "no mail object is even built" );
+				expect( mailServiceStub.$count( "newMail" ) ).toBe( 0, "no mail object is created" );
 			} );
 
 			it( "swallows mail failures instead of throwing into the request", function(){

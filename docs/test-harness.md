@@ -142,18 +142,22 @@ masking is opt-in — so the harness opts in through its own `moduleSettings` in
 masking routes and the TestBox specs rely on.
 
 **Legacy pages (outside ColdBox)** are plain `.cfm` files under
-`test-harness/legacy/`, not Trigger actions. `Bootstrap.onRequestStart()` only
-runs ColdBox for `index.cfm`, so these pages run as ordinary CFML and their
-exceptions reach `Application.cfc` `onError()`, which calls
-`CaptureService.captureException()`. That is the recipe the README gives for a
-legacy folder that shares the ColdBox application. The harness config adds
-`/legacy/` to `applicationFramePrefixes` so those frames count as application
-code. `startFail.cfm` makes `onRequestStart()` throw, which on Adobe arrives at
-`onError()` wrapped in an `EventHandlerException`; the alert must name
-`Harness.StartFail`, not the wrapper. `abortPage.cfm` calls `location()` then
-`abort` and must send nothing on any engine. The alert for a legacy page shows a
-`coldbox` row reading "not a ColdBox request" in place of the routing rows, and
-its rc section is the merged form and url scopes.
+`test-harness/legacy/`. They test errors from older pages that run without
+ColdBox. The harness's `Bootstrap.onRequestStart()` runs ColdBox only for
+`index.cfm`. Errors from the legacy pages reach `Application.cfc`'s `onError()`
+method, which calls `CaptureService.captureException()`. The README shows how
+to use the same setup for a folder that shares the ColdBox application.
+
+The harness adds `/legacy/` to `applicationFramePrefixes` so stack frames from
+these files count as application code. `startFail.cfm` makes `onRequestStart()`
+throw an error. Adobe passes that error to `onError()` inside an
+`EventHandlerException`. The alert must show the original `Harness.StartFail`
+error. `abortPage.cfm` calls `location()` and then `abort`. This page must send
+no email on any engine.
+
+An alert for a legacy page shows a `coldbox` row with "not a ColdBox request"
+instead of routing rows. Its request collection (`rc`) combines posted fields
+from `FORM` with query string fields from `URL`.
 
 ## What a run on Adobe 2023 showed
 
@@ -243,7 +247,8 @@ Two edits:
    to render it as a form button instead of a link.
 
 A scenario that must run outside ColdBox is a file under `test-harness/legacy/`
-instead of a Trigger action. Add the file, then add its path to the legacy group.
+instead of an action in the Trigger handler. Add the file, then add its path to
+the legacy group on the harness home page.
 
 ## Running the specs
 

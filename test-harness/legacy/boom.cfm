@@ -1,13 +1,13 @@
 <cfscript>
-/* A plain page outside ColdBox. Bootstrap only processes index.cfm, so this
- * file runs as ordinary CFML and its exception reaches Application.cfc
- * onError(), which passes it to CaptureService.captureException().
+/* This page runs outside ColdBox. Bootstrap only processes index.cfm, so
+ * Application.cfc's onError() handles this page's error and reports it through
+ * CaptureService.captureException().
  *
- * Request it with a password and an orderId in the query string to see the url scope in the
- * alert's rc section with password masked and orderId readable. */
+ * Add password and orderId to the query string. The alert's request collection
+ * (rc) should hide the password value and show the orderId value. */
 throw(
 	type    = "Harness.LegacyBoom",
-	message = "Legacy page explosion",
-	detail  = "Thrown by /legacy/boom.cfm, which never enters ColdBox."
+	message = "Error in a page outside ColdBox",
+	detail  = "Thrown by /legacy/boom.cfm, which runs without ColdBox."
 );
 </cfscript>

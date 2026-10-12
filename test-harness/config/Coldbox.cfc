@@ -86,9 +86,9 @@ component {
 				/* Keep this override partial to test that module startup restores rc,
 				 * cgi, and extraInfo defaults. session keeps its normal false value. */
 				includeScopes : { session : false },
-				/* Arrays replace the default instead of merging with it, so every
-				 * default prefix is repeated. /legacy/ marks the plain pages outside
-				 * ColdBox as application code. */
+				/* This array replaces the default list, so include every default prefix.
+				 * Add /legacy/ so stack frames from pages outside ColdBox count as
+				 * application code. */
 				applicationFramePrefixes : [
 					"/handlers/",
 					"/models/",

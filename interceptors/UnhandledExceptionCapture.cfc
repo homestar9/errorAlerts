@@ -9,9 +9,10 @@
  * coldbox.system.Bootstrap. The default ignore list skips that event to prevent
  * a second alert for the same exception.
  *
- * CaptureService.captureException() does the work. It owns the reentrancy
- * flag and the per-request dedupe, so an Application.cfc onError() hook and
- * this interceptor share one path.
+ * This interceptor and Application.cfc's onError() both call
+ * CaptureService.captureException(). That method prevents capture from
+ * running again while a capture is in progress. It also prevents duplicate
+ * reports of the same exception within a request.
  */
 component extends="coldbox.system.Interceptor" {
 

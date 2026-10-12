@@ -170,26 +170,26 @@ component extends="tests.resources.BaseUnitSpec" {
 
 				var requestServiceStub = createStub();
 				requestServiceStub.$( "contextExists", false );
-				// Mocked so $count() can report zero calls instead of "never mocked".
+				// Register this mock so $count() can return zero instead of "never mocked".
 				requestServiceStub.$( "getContext", createStub() );
 				var controllerStub = createStub();
 				controllerStub.$( "getRequestService", requestServiceStub );
 				capture.$property( propertyName = "coldbox", mock = controllerStub );
 
 				var snapshot = capture.buildSnapshot( newLogEvent() );
-				// Adobe cannot parse a member call on a parenthesized ternary, so split it.
+				// Adobe cannot call a method on (condition ? a : b). Store the path first.
 				var path     = cgi.path_info.trim().len() ? cgi.path_info : cgi.script_name;
 				var expected = left( path, 200 );
 
-				expect( snapshot.route ).toBe( expected, "the page path stands in for the route" );
-				expect( requestServiceStub.$count( "getContext" ) ).toBe( 0, "no context is created as a side effect" );
+				expect( snapshot.route ).toBe( expected, "the snapshot route contains the page path" );
+				expect( requestServiceStub.$count( "getContext" ) ).toBe( 0, "building the snapshot does not create a request context" );
 			} );
 
 			it( "sends nothing when the module is disabled", function(){
 				settings.enabled = false;
 				capture.capture( newLogEvent() );
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
-				expect( throttleStub.$count( "record" ) ).toBe( 0, "a disabled module records nothing" );
+				expect( throttleStub.$count( "record" ) ).toBe( 0, "a disabled module does not record errors for throttling" );
 			} );
 
 			describe( "captureException", function(){
@@ -220,9 +220,10 @@ component extends="tests.resources.BaseUnitSpec" {
 				} );
 
 				it( "reloads the module mappings before capturing", function(){
-					/* On Lucee and BoxLang an onError() that runs before ColdBox's request
-					 * start has no module mappings, and the first mail build would poison
-					 * WireBox for the rest of the application's life. */
+					/* On Lucee and BoxLang, onError() has no module mappings if it runs
+					 * before ColdBox starts handling the request. Without a reload, the
+					 * first mail build fails and later alerts fail until the application
+					 * is reinitialized. */
 					var moduleServiceStub = createStub();
 					moduleServiceStub.$( "loadMappings" );
 					var controllerStub = createStub();
@@ -267,13 +268,13 @@ component extends="tests.resources.BaseUnitSpec" {
 					try {
 						capture.captureException( newExceptionInfo() );
 						expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
-						expect( request.keyExists( "_errorAlertsCapturing" ) ).toBeTrue( "the outer capture still owns the flag" );
+						expect( request.keyExists( "_errorAlertsCapturing" ) ).toBeTrue( "the flag stays set until the capture already in progress finishes" );
 					} finally {
 						structDelete( request, "_errorAlertsCapturing" );
 					}
 				} );
 
-				it( "ignores abort and relocate pseudo-exceptions on every engine", function(){
+				it( "ignores exception types used for aborts and redirects on every engine", function(){
 					capture.captureException( newAbortInfo( "coldfusion.runtime.AbortException" ) );
 					capture.captureException( newAbortInfo( "lucee.runtime.exp.Abort" ) );
 					capture.captureException( newAbortInfo( "ortus.boxlang.runtime.types.exceptions.AbortException" ) );
@@ -293,7 +294,7 @@ component extends="tests.resources.BaseUnitSpec" {
 					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
 				} );
 
-				it( "does not mistake a type that merely contains abort", function(){
+				it( "reports errors whose type contains abort but is not an abort type", function(){
 					capture.captureException( newAbortInfo( "MyApp.AbortedOrder" ) );
 					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
 				} );
@@ -310,11 +311,11 @@ component extends="tests.resources.BaseUnitSpec" {
 					} );
 
 					var logEvent = capture.$callLog().capture[ 1 ][ 1 ];
-					expect( logEvent.getExtraInfo() ).toBe( real, "the real exception reaches the pipeline" );
+					expect( logEvent.getExtraInfo() ).toBe( real, "capture() receives the original exception" );
 					expect( logEvent.getMessage() ).toInclude( "Fixture explosion" );
 				} );
 
-				it( "does not unwrap an ordinary exception that carries a rootCause", function(){
+				it( "keeps an ordinary exception unchanged when it has a rootCause", function(){
 					capture.$( "capture" );
 					var info      = newExceptionInfo();
 					info.type     = "Database";
@@ -325,14 +326,14 @@ component extends="tests.resources.BaseUnitSpec" {
 					expect( capture.$callLog().capture[ 1 ][ 1 ].getExtraInfo().type ).toBe( "Database" );
 				} );
 
-				it( "copes with an exception that has no message key", function(){
+				it( "reports an exception with no message key without throwing", function(){
 					expect( function(){
 						capture.captureException( { type : "Weird" } );
 					} ).notToThrow();
 					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
 				} );
 
-				it( "copes with a simple value", function(){
+				it( "accepts a simple value without throwing", function(){
 					expect( function(){
 						capture.captureException( "just text" );
 					} ).notToThrow();
@@ -409,7 +410,7 @@ component extends="tests.resources.BaseUnitSpec" {
 	/**
 	 * newAbortInfo
 	 *
-	 * Builds the shape an engine abort takes when it reaches onError().
+	 * Builds a test exception struct for an abort passed to onError().
 	 *
 	 * @type The engine's abort exception type name.
 	 */

@@ -76,11 +76,11 @@ component extends="tests.resources.BaseIntegrationSpec" {
 					expect( mailbox[ 1 ].body ).toInclude( "legacy boom" );
 					expect( mailbox[ 1 ].body ).toInclude(
 						"not a ColdBox request",
-						"the request section says ColdBox did not route it"
+						"the request section identifies a request outside ColdBox"
 					);
 					expect( mailbox[ 1 ].body ).notToInclude( "routePattern", "routing rows are left out" );
 					// The renderer HTML-escapes the asterisks in the mask token, so match the word.
-					expect( mailbox[ 1 ].body ).toInclude( "masked", "the url scope is masked like rc" );
+					expect( mailbox[ 1 ].body ).toInclude( "masked", "values from URL are masked in the request collection" );
 					expect( mailbox[ 1 ].body ).notToInclude( "legacy-secret" );
 					expect( requestService.contextExists() ).toBeFalse( "capturing must not create a request context" );
 				} finally {
