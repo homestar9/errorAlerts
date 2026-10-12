@@ -145,8 +145,9 @@ masking routes and the TestBox specs rely on.
 `test-harness/legacy/`. They test errors from older pages that run without
 ColdBox. The harness's `Bootstrap.onRequestStart()` runs ColdBox only for
 `index.cfm`. Errors from the legacy pages reach `Application.cfc`'s `onError()`
-method, which calls `CaptureService.captureException()`. The README shows how
-to use the same setup for a folder that shares the ColdBox application.
+method, which calls `CaptureService.captureException()`. The
+[pages outside ColdBox example](reference.md#pages-outside-coldbox) shows how to
+use the same setup for a folder that shares the ColdBox application.
 
 The harness adds `/legacy/` to `applicationFramePrefixes` so stack frames from
 these files count as application code. `startFail.cfm` makes `onRequestStart()`
