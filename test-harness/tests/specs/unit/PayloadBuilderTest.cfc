@@ -15,10 +15,14 @@ component extends="tests.resources.BaseUnitSpec" {
 				classifier = prepareMock( new errorAlerts.models.FrameClassifier() );
 				classifier.$property( propertyName = "settings", mock = settings );
 				classifier.$property( propertyName = "coldbox", mock = newControllerStub() );
+				// The runner is a web request. Pin that, so no spec depends on engine detection.
+				threadClassifier = prepareMock( new errorAlerts.models.ThreadClassifier() );
+				threadClassifier.$( "isAsyncThread", false );
 				builder = prepareMock( new errorAlerts.models.PayloadBuilder() );
 				builder.$property( propertyName = "settings", mock = settings );
 				builder.$property( propertyName = "coldbox", mock = newControllerStub() );
 				builder.$property( propertyName = "frameClassifier", mock = classifier );
+				builder.$property( propertyName = "threadClassifier", mock = threadClassifier );
 			} );
 
 			it( "builds the core payload fields", function(){
@@ -705,6 +709,113 @@ component extends="tests.resources.BaseUnitSpec" {
 				var urlLine = builder.requestUrl();
 				expect( urlLine ).toInclude( "masked" );
 				expect( urlLine ).toInclude( "?", "the stubbed query string is appended" );
+			} );
+
+			describe( "in a ColdBox async thread", function(){
+				/* ColdBox's BaseProxy copies the request that created a task into the
+				 * task's thread. The runner's real CGI scope and a stubbed ColdBox
+				 * context stand in for that copied request. */
+
+				beforeEach( function(){
+					// A real classifier with only its engine and thread seams stubbed.
+					threadClassifier = prepareMock( new errorAlerts.models.ThreadClassifier() );
+					threadClassifier.$( "engineName", "adobe" );
+					threadClassifier.$( "isCfThread", false );
+					threadClassifier.$( "adobeAsyncFlag", true );
+					threadClassifier.$( "currentThreadName", "pool-1-thread-1" );
+					threadClassifier.$( "liveStackTemplates", [
+						"C:/sites/app/coldbox/system/web/tasks/ColdBoxScheduledTask.cfc",
+						"C:/sites/app/coldbox/system/async/tasks/ScheduledTask.cfc",
+						"C:/sites/app/coldbox/system/async/cbproxies/models/BaseProxy.cfc"
+					] );
+					builder.$property( propertyName = "threadClassifier", mock = threadClassifier );
+
+					copiedController = newControllerStub(
+						rc           = { slug : "july-contractor-of-the-month", phoneId : 7 },
+						currentEvent = "blog.show"
+					);
+					builder.$property( propertyName = "coldbox", mock = copiedController );
+
+					// Turn on every optional request row, so the spec proves each one is left out.
+					settings.includeScopes.session = true;
+					settings.includeRequestBody    = true;
+					settings.includeHeaders        = [ "User-Agent", "Host" ];
+					settings.userProvider          = function( wirebox ){
+						return "visitor@example.com";
+					};
+				} );
+
+				it( "labels a scheduled task and leaves out every row from the copied request", function(){
+					var payload = builder.build(
+						newLogEvent( message = "Error running task (Delete old temp uploads) : boom", extraInfo = newExceptionInfo() ),
+						"sig-1",
+						1
+					);
+
+					expect( payload.request.context ).toBe( "scheduled task (pool-1-thread-1)" );
+					expect( payload.request.coldbox ).toBe( "not a ColdBox request" );
+
+					var copiedRows = [
+						"url", "user", "method", "queryString", "path", "host", "referer", "remoteAddr",
+						"forwardedFor", "forwardedProto", "userAgent", "accept", "acceptLanguage", "https",
+						"serverPort", "serverName", "templatePath", "event", "route", "routePattern",
+						"routeName", "routedModule", "routedNamespace", "view", "layout", "isAjax",
+						"sessionId", "elapsed", "User-Agent", "Host"
+					];
+					for ( var key in copiedRows ) {
+						expect( payload.request ).notToHaveKey( key, "#key# would describe the copied request" );
+					}
+					expect( payload.rc ).toBeEmpty( "the copied request collection is left out" );
+					expect( payload.requestBody ).toBe( "", "the copied request body is left out" );
+					expect( copiedController.getRequestService().$count( "getContext" ) ).toBe(
+						0,
+						"the copied ColdBox context is never read"
+					);
+
+					expect( payload.request ).toHaveKey( "origin" );
+					expect( payload.request.machine ).notToBe( settings.emptyValueText );
+					expect( payload.request.memory ).toMatch( "\d+ MB used of \d+ MB max" );
+					expect( payload.runtime ).toHaveKey( "engine" );
+					expect( payload.message ).toInclude( "Delete old temp uploads" );
+					expect( payload.exception.tagContext ).notToBeEmpty( "the stack is kept" );
+				} );
+
+				it( "finds a scheduled task frame in the exception when the live stack has none", function(){
+					// An error that escapes ScheduledTask.run() reaches BaseProxy after run() returned.
+					threadClassifier.$( "liveStackTemplates", [ "C:/sites/app/coldbox/system/async/cbproxies/models/BaseProxy.cfc" ] );
+					var info = newExceptionInfo();
+					info.tagContext.append( { template : "C:/sites/app/coldbox/system/async/tasks/ScheduledTask.cfc", line : 734 } );
+
+					var payload = builder.build( newLogEvent( extraInfo = info ), "sig-1", 1 );
+
+					expect( payload.request.context ).toBe( "scheduled task (pool-1-thread-1)" );
+				} );
+
+				it( "labels an async thread with no scheduled task frame", function(){
+					threadClassifier.$( "currentThreadName", "ForkJoinPool.commonPool-worker-1" );
+					threadClassifier.$( "liveStackTemplates", [ "C:/sites/app/coldbox/system/async/cbproxies/models/BaseProxy.cfc" ] );
+
+					var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
+					expect( payload.request.context ).toBe( "async thread (ForkJoinPool.commonPool-worker-1)" );
+					expect( payload.request ).notToHaveKey( "url" );
+					expect( payload.rc ).toBeEmpty();
+				} );
+
+				it( "leaves a web request unchanged", function(){
+					threadClassifier.$( "adobeAsyncFlag", false );
+					threadClassifier.$( "currentThreadName", "ajp-nio-127.0.0.1-8022-exec-4" );
+
+					var payload = builder.build( newLogEvent(), "sig-1", 1 );
+
+					expect( payload.request.context ).toBe( "web request (ajp-nio-127.0.0.1-8022-exec-4)" );
+					expect( payload.request ).toHaveKey( "url" );
+					expect( payload.request ).toHaveKey( "method" );
+					expect( payload.request ).toHaveKey( "user" );
+					expect( payload.request.event ).toBe( "blog.show" );
+					expect( payload.request ).notToHaveKey( "coldbox" );
+					expect( payload.rc.slug ).toBe( "july-contractor-of-the-month" );
+				} );
 			} );
 
 			it( "reports the runtime versions and caches them", function(){

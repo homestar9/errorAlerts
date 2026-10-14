@@ -26,11 +26,16 @@ component extends="tests.resources.BaseUnitSpec" {
 				builderStub.$( "build", { type : "error" } );
 				builderStub.$( "buildDigest", { type : "digest" } );
 
+				// The runner is a web request. Specs that need an async thread change this stub.
+				threadStub = createStub();
+				threadStub.$( "isAsyncThread", false );
+
 				capture = prepareMock( new errorAlerts.models.CaptureService() );
 				capture.$property( propertyName = "settings", mock = settings );
 				capture.$property( propertyName = "signatureService", mock = signatureStub );
 				capture.$property( propertyName = "throttleService", mock = throttleStub );
 				capture.$property( propertyName = "payloadBuilder", mock = builderStub );
+				capture.$property( propertyName = "threadClassifier", mock = threadStub );
 				capture.setNotifier( notifierStub );
 			} );
 
@@ -183,6 +188,29 @@ component extends="tests.resources.BaseUnitSpec" {
 
 				expect( snapshot.route ).toBe( expected, "the snapshot route contains the page path" );
 				expect( requestServiceStub.$count( "getContext" ) ).toBe( 0, "building the snapshot does not create a request context" );
+			} );
+
+			it( "leaves the snapshot route and client blank in a scheduled task thread", function(){
+				makePublic( capture, "buildSnapshot" );
+				threadStub.$( "isAsyncThread", true );
+
+				// A task thread carries a copy of the request that created it.
+				var eventStub = createStub();
+				eventStub.$( "getCurrentRoutedUrl", "blog/july-contractor-of-the-month/" );
+				eventStub.$( "getCurrentEvent", "blog.show" );
+				var requestServiceStub = createStub();
+				requestServiceStub.$( "contextExists", true );
+				requestServiceStub.$( "getContext", eventStub );
+				var controllerStub = createStub();
+				controllerStub.$( "getRequestService", requestServiceStub );
+				capture.$property( propertyName = "coldbox", mock = controllerStub );
+
+				var snapshot = capture.buildSnapshot( newLogEvent() );
+
+				expect( snapshot.route ).toBe( "", "the copied route is not the task's route" );
+				expect( snapshot.client ).toBe( "", "the copied client address is not the task's client" );
+				expect( snapshot.message ).toBe( "Something failed", "the digest fields still fill in" );
+				expect( requestServiceStub.$count( "getContext" ) ).toBe( 0, "the copied request context is never read" );
 			} );
 
 			it( "sends nothing when the module is disabled", function(){

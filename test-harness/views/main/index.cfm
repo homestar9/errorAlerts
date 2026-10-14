@@ -61,7 +61,8 @@
 				{ route : "/trigger/logWarn", note : "Below levelMin. No email should arrive.", alerts : false },
 				{ route : "/trigger/logInfo", note : "Below levelMin. No email should arrive.", alerts : false },
 				{ route : "/trigger/logIgnoredCategory", note : "Category starts with cbmailservices. No email should arrive.", alerts : false },
-				{ route : "/trigger/logFromThread", note : "Logged from a thread, so there is no request context." }
+				{ route : "/trigger/logFromThread", note : "Logged from a thread, so there is no request context." },
+				{ route : "/trigger/taskFailure", note : "The harness's ColdBox scheduled task fails about a second later. One email labelled scheduled task, with no URL, event, or rc from the request that started the app." }
 			]
 		},
 		{

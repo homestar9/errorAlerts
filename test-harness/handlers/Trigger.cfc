@@ -592,6 +592,23 @@ component {
 		return sent( "log.error() from a background thread with no request context" );
 	}
 
+	/**
+	 * taskFailure
+	 *
+	 * Makes the harness's ColdBox scheduled task fail on its next run, within
+	 * about a second. The task thread carries a copy of the request that started
+	 * the application. The alert should say "scheduled task (pool-N-thread-M)"
+	 * and show no URL, event, rc, or other row from that copied request.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
+	 */
+	function taskFailure( event, rc, prc ){
+		getInstance( "appScheduler@coldbox" ).armFailure();
+		return sent( "a log.error() from the scheduled task's onFailure() handler, about a second from now" );
+	}
+
 	/* -----------------------------------------------------------------------
 	 * Throttling and digests
 	 * --------------------------------------------------------------------- */

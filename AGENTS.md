@@ -143,6 +143,22 @@ page and how to send its alert emails to a local SMTP server so you can read the
   for later attempts until the application is reinitialized. Adobe keeps mappings for the whole
   application and does not have this problem. Keep the reload call. If you change it, run the legacy
   scenarios on Lucee or BoxLang, starting with `startFail.cfm`.
+- Request data is never trustworthy inside a ColdBox async thread. ColdBox's
+  `BaseProxy` copies the request that created a scheduled task or future into its
+  executor thread:
+  - Adobe: `cgi` is a snapshot of that request.
+  - Lucee: the thread gets a dummy page context whose `cgi` says `GET` and `localhost`.
+  - BoxLang: the thread's context chain leads back to that request.
+
+  `ThreadClassifier.isAsyncThread()` detects these threads with each engine's own
+  mark: Adobe's `FusionContext.isAsyncThread()`, Lucee's dummy page context, and
+  BoxLang's `ThreadBoxContext`. If the mark cannot be read, it falls back to the
+  JDK executor thread names (`pool-N-thread-M`, `ForkJoinPool...-worker-N`).
+  It checks for `cfthread` first, because on Adobe a `cfthread` inherits the async
+  flag from its parent. `PayloadBuilder` and `CaptureService.buildSnapshot()` must
+  ask it before reading `cgi`, `url`, headers or the ColdBox request context. Every
+  engine check is a separate private method, so specs stub them instead of
+  starting threads.
 - Adobe cannot parse a member call on a parenthesized expression such as
   `( a ? b : c ).left( 200 )`. Adobe reports this as a named-parameter error. Assign the expression's
   result to a variable first, then call the method on that variable.

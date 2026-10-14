@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alerts from ColdBox scheduled tasks no longer show an unrelated visitor's
+  request.** ColdBox copies the request that started the application into every
+  scheduled task and async thread. Task alerts were labelled `web request` and
+  showed that request's URL, event, routing rows, `rc`, template path, client
+  address, user agent, and headers, all unchanged until the next reinit. The
+  module now detects these threads on Adobe ColdFusion, Lucee, and BoxLang
+  before it reads any request data. It labels them
+  `scheduled task (<thread name>)`, or `async thread (<thread name>)` for other
+  ColdBox async work such as `newFuture()`. They get the same "not a ColdBox
+  request" handling as code outside ColdBox, and the request rows, user, elapsed
+  time, session ID, `rc`, and request body are left out. The origin, machine,
+  memory, runtime, message, and stack trace are kept. Digest emails no longer
+  list the copied route and client address for these errors. Grouping of
+  repeated errors is unchanged, because signatures never included the URL or
+  event. `cfthread` keeps its previous label.
+
+### Added
+
+- The test harness has a ColdBox scheduled task that fails on demand
+  (`/trigger/taskFailure`). A new integration spec uses it.
+
 ## [2.7.0] - 2026-10-12
 
 ### Added
