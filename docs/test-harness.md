@@ -126,6 +126,18 @@ no request context. Three of them deliberately produce nothing: `logWarn` and
 starts with `cbmailservices`, which is in `ignoreCategories`. An email from any
 of those three is a bug.
 
+`/trigger/taskFailure` arms the harness's ColdBox scheduled task
+(`test-harness/config/Scheduler.cfc`, `harnessFailingTask`), which then fails on
+its next run, about a second later. The task's `onFailure()` handler logs the
+failure through the `harness.tasks` logger, so one email arrives. ColdBox's own
+two `ERROR` lines for the failure go only to the console, because the harness
+LogBox config sends `coldbox.system` to the console appender only. ColdBox's app
+template has the same config. ColdBox copies the request that started the
+application into the task's thread. The email must say
+`scheduled task (pool-N-thread-M)` and show no URL, event, `rc`, or other row
+from that copied request. `ScheduledTaskTest` checks the same thing on every
+engine.
+
 **Throttling and digests** fire the same error repeatedly so the first-N and
 digest behavior can be watched. `/trigger/flushDigest` sends any pending digest
 immediately rather than waiting for the scheduler. `/trigger/reset` clears every

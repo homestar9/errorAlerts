@@ -30,6 +30,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				builder.$property( propertyName = "settings", mock = settings );
 				builder.$property( propertyName = "coldbox", mock = benchControllerStub() );
 				builder.$property( propertyName = "frameClassifier", mock = classifier );
+				builder.$property( propertyName = "threadClassifier", mock = new errorAlerts.models.ThreadClassifier() );
 			} );
 
 			it( "(a) extraInfo containing one 5 MB base64-style string", function(){

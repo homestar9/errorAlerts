@@ -127,6 +127,50 @@ alert can include its type, detail, and stack frames.
 For pages that run outside ColdBox, use the
 [`Application.cfc` example](docs/reference.md#pages-outside-coldbox).
 
+### Scheduled tasks and async threads
+
+ColdBox catches a failing scheduled task and logs two `ERROR` messages, one with
+the message and one with the stack trace, under the category
+`coldbox.system.web.tasks.ColdBoxScheduledTask`. Those messages reach errorAlerts
+only when that category uses the root logger's appenders. ColdBox's application
+template sets `info : [ "coldbox.system" ]` in its LogBox config, which ties
+`coldbox.system` to the appenders that exist at startup, before errorAlerts adds
+its own. With that config, report task failures yourself in `onFailure()`. This
+also gives the alert the exception's stack frames:
+
+```cfc
+task( "cleanup" )
+    .call( () => getInstance( "UploadService" ).deleteOldTempFiles() )
+    .onFailure( function( task, exception ){
+        log.error( "Scheduled task cleanup failed: #arguments.exception.message#", arguments.exception );
+    } )
+    .everyDay();
+```
+
+ColdBox copies the request that started the application into every scheduled
+task and async thread. Without special handling, a task alert would show that
+unrelated request's URL, event, and visitor. errorAlerts detects these threads
+and reports them like code outside ColdBox: the alert has a "not a ColdBox
+request" row and leaves out the URL, user, routing rows, CGI rows, headers,
+session ID, request body, and `rc`. The origin, machine, memory, runtime
+versions, message, and stack trace remain. Digests for these errors list no
+routes or client addresses.
+
+The `context` row in the Request section says where the error ran, followed by
+the Java thread name:
+
+| `context` | Meaning |
+|---|---|
+| `web request (XNIO-1 task-3)` | A web request. |
+| `scheduled task (pool-2-thread-1)` | A ColdBox scheduled task. |
+| `async thread (ForkJoinPool.commonPool-worker-1)` | Other ColdBox async work, such as `asyncManager.newFuture()` or Adobe's `runAsync()`. |
+| `background thread (...)` | Any other thread without a request, such as some `cfthread` threads. |
+
+Adobe ColdFusion, Lucee, and BoxLang each mark these threads differently, and
+errorAlerts checks the mark for the running engine. If that check fails, it
+falls back to the Java executor's default thread names. `cfthread` keeps its
+previous label on every engine.
+
 ## Common settings
 
 Set these values in the struct returned by `configure()` in

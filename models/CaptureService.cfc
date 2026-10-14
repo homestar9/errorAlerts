@@ -17,6 +17,7 @@ component singleton accessors="true" {
 	property name="signatureService" inject="SignatureService@errorAlerts";
 	property name="throttleService"  inject="ThrottleService@errorAlerts";
 	property name="payloadBuilder"   inject="PayloadBuilder@errorAlerts";
+	property name="threadClassifier" inject="ThreadClassifier@errorAlerts";
 	property name="wirebox"          inject="wirebox";
 	property name="coldbox"          inject="coldbox";
 
@@ -483,6 +484,10 @@ component singleton accessors="true" {
 	 * or many requests. A page outside ColdBox uses its file path as the route.
 	 * If a value cannot be read, that value stays blank.
 	 *
+	 * A scheduled task or other ColdBox async thread leaves both blank. Its
+	 * request data is a copy of the request that created the thread, so the
+	 * digest would otherwise list that unrelated route and client.
+	 *
 	 * @logEvent The LogBox LogEvent being recorded.
 	 */
 	private struct function buildSnapshot( required any logEvent ){
@@ -494,6 +499,10 @@ component singleton accessors="true" {
 			route     : "",
 			client    : ""
 		};
+
+		if ( threadClassifier.isAsyncThread() ) {
+			return snapshot;
+		}
 
 		try {
 			if ( hasColdBoxContext() ) {

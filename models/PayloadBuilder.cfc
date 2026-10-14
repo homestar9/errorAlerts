@@ -7,13 +7,18 @@
  * A web request outside ColdBox provides a "not a ColdBox request" row instead
  * of routing details. Its request collection combines FORM and URL fields.
  * Events outside web requests have no FORM or URL fields to include.
+ *
+ * A scheduled task or other ColdBox async thread carries a copy of the request
+ * that created it. Its alert reads no request data at all and is treated as
+ * code outside ColdBox.
  */
 component singleton accessors="true" {
 
 	// WireBox injects these dependencies.
-	property name="settings"        inject="coldbox:moduleSettings:errorAlerts";
-	property name="coldbox"         inject="coldbox";
-	property name="frameClassifier" inject="FrameClassifier@errorAlerts";
+	property name="settings"         inject="coldbox:moduleSettings:errorAlerts";
+	property name="coldbox"          inject="coldbox";
+	property name="frameClassifier"  inject="FrameClassifier@errorAlerts";
+	property name="threadClassifier" inject="ThreadClassifier@errorAlerts";
 
 	/**
 	 * init
@@ -73,6 +78,9 @@ component singleton accessors="true" {
 
 		var exception = buildException( arguments.logEvent.getExtraInfo() );
 
+		// An async thread's request data belongs to the request that created it.
+		var asyncKind = asyncThreadKind( arguments.logEvent.getExtraInfo() );
+
 		var payload = {
 			type          : "error",
 			severity      : levelName( arguments.logEvent.getSeverity() ),
@@ -87,18 +95,18 @@ component singleton accessors="true" {
 			maxPerWindow  : settings.throttle.maxPerWindow,
 			windowSeconds : settings.throttle.windowSeconds,
 			exception     : exception,
-			request       : buildRequest( exception ),
+			request       : buildRequest( exception, asyncKind ),
 			runtime       : runtimeInfo(),
 			rc            : {},
 			requestBody   : "",
 			extraInfo     : ""
 		};
 
-		if ( settings.includeScopes.rc ) {
+		if ( settings.includeScopes.rc && !asyncKind.len() ) {
 			payload.rc = buildRc();
 		}
 
-		if ( settings.includeRequestBody ) {
+		if ( settings.includeRequestBody && !asyncKind.len() ) {
 			payload.requestBody = buildRequestBody();
 		}
 
@@ -564,12 +572,24 @@ component singleton accessors="true" {
 	 * If reading the request context fails, keep the routing rows and fill any
 	 * missing values with placeholders. This shows the failure in the email.
 	 *
+	 * An async thread gets only the origin, coldbox, machine, context, and
+	 * memory rows. Every other row would describe the copied request.
+	 *
 	 * @exception The already-built exception struct, used to find the origin.
+	 * @asyncKind The label from asyncThreadKind(), empty outside an async thread.
 	 */
-	private struct function buildRequest( struct exception = {} ){
+	private struct function buildRequest( struct exception = {}, string asyncKind = "" ){
 		var info = structNew( "ordered" );
 
 		addValue( info, "origin", buildOrigin( arguments.exception ) );
+
+		if ( arguments.asyncKind.len() ) {
+			addValue( info, "coldbox", "not a ColdBox request" );
+			addValue( info, "machine", machineName() );
+			addValue( info, "context", executionContext( arguments.asyncKind ) );
+			addValue( info, "memory", memoryUsage() );
+			return info;
+		}
 
 		// Build a complete method and URL that a developer can copy.
 		addValue( info, "url", requestUrl() );
@@ -750,21 +770,53 @@ component singleton accessors="true" {
 	}
 
 	/**
+	 * asyncThreadKind
+	 *
+	 * Returns "scheduled task" or "async thread" when the error comes from a
+	 * thread that runs a ColdBox async proxy. Returns an empty string for
+	 * requests, cfthread, and other threads. A scheduled task frame on the live
+	 * stack or in the exception's frames selects "scheduled task".
+	 *
+	 * @extraInfo The log event's extraInfo value, any type.
+	 */
+	private string function asyncThreadKind( any extraInfo ){
+		if ( !threadClassifier.isAsyncThread() ) {
+			return "";
+		}
+
+		var frames = [];
+		try {
+			if (
+				!isNull( arguments.extraInfo )
+				&& ( isObject( arguments.extraInfo ) || isStruct( arguments.extraInfo ) )
+				&& structKeyExists( arguments.extraInfo, "tagContext" )
+				&& isArray( arguments.extraInfo.tagContext )
+			) {
+				frames = arguments.extraInfo.tagContext;
+			}
+		} catch ( any e ) {
+		}
+
+		return threadClassifier.hasScheduledTaskFrame( frames ) ? "scheduled task" : "async thread";
+	}
+
+	/**
 	 * executionContext
 	 *
 	 * Describes the request or background thread that produced the error.
 	 * The Java thread name can connect an alert to an engine log. Only an HTTP
-	 * request has cgi.request_method.
+	 * request has cgi.request_method, but an async thread carries a copied
+	 * cgi scope, so its label is decided before cgi is read.
+	 *
+	 * @asyncKind The label from asyncThreadKind(), empty outside an async thread.
 	 */
-	private string function executionContext(){
-		var threadName = "";
+	private string function executionContext( string asyncKind = "" ){
+		var threadName = threadClassifier.threadName();
+		var suffix     = threadName.len() ? " (#threadName#)" : "";
 
-		try {
-			threadName = createObject( "java", "java.lang.Thread" ).currentThread().getName();
-		} catch ( any e ) {
+		if ( arguments.asyncKind.len() ) {
+			return arguments.asyncKind & suffix;
 		}
-
-		var suffix = threadName.len() ? " (#threadName#)" : "";
 
 		try {
 			if ( cgi.request_method.trim().len() ) {
