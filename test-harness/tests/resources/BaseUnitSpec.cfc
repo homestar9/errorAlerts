@@ -38,6 +38,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			digestSampleSize     : 5,
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
 			ignoreExceptionTypes : [],
+			ignoreMessagePatterns : [],
 			suppressDuplicateFrameworkLogs : true,
 			normalizeSignatures  : true,
 			maxBodyBytes         : 102400,

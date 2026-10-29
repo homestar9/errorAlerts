@@ -78,6 +78,59 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
 			} );
 
+			describe( "ignoreMessagePatterns", function(){
+				it( "skips a log message that matches a pattern, ignoring case", function(){
+					settings.ignoreMessagePatterns = [ "clientabortexception" ];
+					capture.capture( newLogEvent( message = "Unhandled exception: ClientAbortException: java.io.IOException" ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+					expect( throttleStub.$count( "record" ) ).toBe( 0, "ignored events never reach the throttle" );
+				} );
+
+				it( "skips a logged error whose exception message matches", function(){
+					settings.ignoreMessagePatterns = [ "Fixture explosion" ];
+					capture.capture( newLogEvent( message = "Order could not be saved", extraInfo = newExceptionInfo() ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				} );
+
+				it( "skips a logged error whose exception detail matches", function(){
+					settings.ignoreMessagePatterns = [ "^Deliberate test" ];
+					capture.capture( newLogEvent( message = "Order could not be saved", extraInfo = newExceptionInfo() ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				} );
+
+				it( "still sends when no pattern matches", function(){
+					settings.ignoreMessagePatterns = [ "ClientAbortException", "connection was aborted" ];
+					capture.capture( newLogEvent( extraInfo = newExceptionInfo() ) );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+				} );
+
+				it( "skips an invalid pattern and still checks the others", function(){
+					settings.ignoreMessagePatterns = [ "([unclosed", "Something" ];
+					expect( function(){
+						capture.capture( newLogEvent( message = "Something failed" ) );
+					} ).notToThrow();
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0, "the valid pattern still matches" );
+				} );
+
+				it( "sends when the only pattern is invalid", function(){
+					settings.ignoreMessagePatterns = [ "([unclosed" ];
+					capture.capture( newLogEvent() );
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1, "a bad pattern ignores nothing" );
+				} );
+
+				it( "applies to exceptions reported through captureException", function(){
+					structDelete( request, "_errorAlertsReported" );
+					structDelete( request, "_errorAlertsCapturing" );
+					settings.ignoreMessagePatterns = [ "An established connection was aborted" ];
+					var info = newExceptionInfo();
+					info.message = "An established connection was aborted by the software in your host machine";
+
+					capture.captureException( info );
+
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 0 );
+				} );
+			} );
+
 			describe( "duplicate framework logs", function(){
 				/* RestHandler reports some errors twice, but onError() only logs once.
 				 * Drop duplicates without losing the single onError report. */

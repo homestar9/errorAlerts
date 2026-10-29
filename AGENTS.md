@@ -191,4 +191,10 @@ page and how to send its alert emails to a local SMTP server so you can read the
 
 ## Releasing
 
-This module uses a specific release methodology. See [RELEASE.md](RELEASE.md) for details. Do not bump versions or release unless explicitly asked to do so.
+Releases use [commandbox-release](https://github.com/homestar9/commandbox-release) (`box release ...`),
+configured in `release.json`. See [RELEASE.md](RELEASE.md) and
+[docs/release-process.md](docs/release-process.md) for details. Do not bump versions or release
+unless explicitly asked to do so.
+
+`box release test` runs the suite on every engine listed in `release.json`, starting and stopping
+each server in turn.

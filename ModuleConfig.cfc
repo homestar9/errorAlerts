@@ -64,6 +64,13 @@ component {
 			ignoreCategories     : [ "cbmailservices", "coldbox.system.Bootstrap" ],
 			// Ignore exceptions with one of these exact type values.
 			ignoreExceptionTypes : [],
+			/* Ignore errors whose message matches one of these regular expressions.
+			 * Matching ignores case and can hit any part of the text. The module
+			 * checks the log message and, when extraInfo is an exception, its
+			 * message and detail. Use this for errors that have no stable type,
+			 * such as a client that closed the connection. An invalid pattern is
+			 * skipped. */
+			ignoreMessagePatterns : [],
 			/* RestHandler reports some exceptions twice. It logs the exception and
 			 * then announces onException. Keep only the announcement because it has
 			 * the tagContext needed for stack frames and source code. Category rules
