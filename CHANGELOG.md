@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An invalid pattern is skipped instead of stopping alerts. The default is an
   empty list, so nothing changes until you set it.
 
+### Changed
+
+- Releases now use [commandbox-release](https://github.com/homestar9/commandbox-release)
+  (`box release ...`), configured in `release.json`. The `bump:*`, `release:*` and
+  `build:package` scripts and the `build/` task files are removed.
+  `box run-script test:engines` is replaced by `box release test`.
+
 ## [2.8.0] - 2026-10-14
 
 ### Fixed
