@@ -47,6 +47,7 @@ also captured by the ColdBox interceptor.
 | `normalizeSignatures` | `true` | Treats numbers and UUIDs in messages as placeholders when grouping errors. |
 | `ignoreCategories` | `[ "cbmailservices", "coldbox.system.Bootstrap" ]` | Log category prefixes that never produce alerts. |
 | `ignoreExceptionTypes` | `[]` | Exact exception type names to ignore, without case sensitivity. |
+| `ignoreMessagePatterns` | `[]` | Regular expressions matched against error messages, without case sensitivity. A match anywhere in the text ignores the error. |
 | `suppressDuplicateFrameworkLogs` | `true` | Skips the logged copy of an error that ColdBox's RestHandler also reports through `onException`. |
 
 Keep `suppressDuplicateFrameworkLogs` enabled unless you unregister
@@ -131,6 +132,24 @@ ignoreCategories : [
 Category matching ignores case and checks the start of the name. Keep
 `cbmailservices` to avoid alerts about failed alert emails. Keep
 `coldbox.system.Bootstrap` to avoid duplicate reports of unhandled exceptions.
+
+Some errors have no type you can match reliably. A visitor who closes the page
+mid-response, for example, raises a general `java.io.IOException`, and ignoring
+that type would also hide real file errors. Match the message instead:
+
+```cfc
+ignoreMessagePatterns : [
+    "ClientAbortException",
+    "An established connection was aborted"
+]
+```
+
+Each entry is a regular expression. Matching ignores case and can hit any part
+of the text; use `^` or `$` to anchor it. The module checks the log message and,
+when `extraInfo` is an exception, that exception's `message` and `detail`. An
+unhandled exception's log message is `Unhandled exception: <message> <detail>`.
+A pattern the regex engine rejects is skipped. Escape `.`, `(` and other regex
+characters when you mean them literally.
 
 ### Identify the signed-in user
 

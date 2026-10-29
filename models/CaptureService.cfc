@@ -181,7 +181,7 @@ component singleton accessors="true" {
 	/**
 	 * isIgnored
 	 *
-	 * Checks the category prefix and exception type ignore lists.
+	 * Checks the category prefix, exception type, and message pattern ignore lists.
 	 *
 	 * @logEvent The LogBox LogEvent to test.
 	 */
@@ -204,6 +204,48 @@ component singleton accessors="true" {
 				&& settings.ignoreExceptionTypes.findNoCase( extraInfo.type )
 			) {
 				return true;
+			}
+		}
+
+		if ( settings.ignoreMessagePatterns.len() && matchesIgnoredMessage( arguments.logEvent ) ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * matchesIgnoredMessage
+	 *
+	 * Checks the log message, and the message and detail of an exception passed
+	 * as extraInfo, against each ignoreMessagePatterns entry. An unhandled
+	 * exception's log message already contains its message and detail. A logged
+	 * error usually has its own message, so the exception fields are checked too.
+	 *
+	 * Skip a pattern the regex engine rejects instead of failing the whole check.
+	 * A bad pattern then ignores nothing rather than stopping every alert.
+	 *
+	 * @logEvent The LogBox LogEvent to test.
+	 */
+	private boolean function matchesIgnoredMessage( required any logEvent ){
+		var texts     = [ arguments.logEvent.getMessage() ];
+		var extraInfo = arguments.logEvent.getExtraInfo();
+		texts.append( fieldText( extraInfo, "message" ) );
+		texts.append( fieldText( extraInfo, "detail" ) );
+
+		for ( var pattern in settings.ignoreMessagePatterns ) {
+			for ( var text in texts ) {
+				if ( !len( text ) ) {
+					continue;
+				}
+				try {
+					if ( reFindNoCase( pattern, text ) ) {
+						return true;
+					}
+				} catch ( any e ) {
+					// An invalid pattern can never match. Try the next one.
+					break;
+				}
 			}
 		}
 

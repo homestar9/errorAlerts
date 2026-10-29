@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New `ignoreMessagePatterns` setting ignores errors by message.** Some
+  errors have no type you can match exactly. A visitor who closes the page
+  mid-response raises a general `java.io.IOException`, and ignoring that type
+  would also hide real file errors. Each entry is a regular expression, matched
+  without case sensitivity against the log message and, when `extraInfo` is an
+  exception, against its `message` and `detail`. It applies to logged errors and
+  to unhandled exceptions, including those from `Application.cfc` `onError()`.
+  An invalid pattern is skipped instead of stopping alerts. The default is an
+  empty list, so nothing changes until you set it.
+
 ## [2.8.0] - 2026-10-14
 
 ### Fixed
