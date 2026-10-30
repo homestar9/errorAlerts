@@ -167,6 +167,38 @@ component {
 	}
 
 	/**
+	 * mailbox
+	 *
+	 * Returns the active mailer and the subjects in the in-memory mailbox as
+	 * JSON. Specs run in a separate application, so they read this harness's
+	 * mailbox over HTTP. The protocol comes from the service, not the startup
+	 * settings, so it stays correct after /main/mailer switches it.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
+	 */
+	function mailbox( event, rc, prc ){
+		var mailService = getInstance( "MailService@cbmailservices" );
+		var subjects    = [];
+		try {
+			for ( var mail in mailService.getMailer( "default" ).transit.getMail() ) {
+				subjects.append( mail.subject );
+			}
+		} catch ( any e ) {
+		}
+
+		event.renderData(
+			type = "json",
+			data = {
+				"protocol" : mailService.getDefaultProtocol(),
+				"count"    : subjects.len(),
+				"subjects" : subjects
+			}
+		);
+	}
+
+	/**
 	 * lastMail
 	 *
 	 * Renders the HTML body of the newest in-memory email.

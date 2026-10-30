@@ -45,6 +45,13 @@ component {
 			notifier             : "EmailNotifier@errorAlerts",
 			// "queue" sends later. "send" waits for email delivery.
 			deliveryMode         : "queue",
+			/* When an unhandled exception arrives after the request has passed its
+			 * time limit, give the request at least this many more seconds so the
+			 * alert and the error page can finish. Otherwise Adobe throws the
+			 * timeout again at the next cfoutput, cfquery or cfmail, and Lucee
+			 * stops the request again during onError(). BoxLang does not enforce
+			 * the limit. Runs once per request. Set this to 0 to turn it off. */
+			timeoutExtensionSeconds : 60,
 			// Set the LogBox severity range that produces alerts.
 			levelMin             : "FATAL",
 			levelMax             : "ERROR",
@@ -177,6 +184,8 @@ component {
 			return;
 		}
 
+		warnUnsentQueue( moduleSettings );
+
 		var logBox = controller.getLogBox();
 		logBox.registerAppender(
 			name     = "errorAlerts",
@@ -288,6 +297,31 @@ component {
 		}
 
 		return true;
+	}
+
+	/**
+	 * warnUnsentQueue
+	 *
+	 * Prints a warning when queued alerts would never be sent. cbmailservices
+	 * sends its queue from a scheduled task that runQueueTask can turn off, and
+	 * a failed queued send is logged under the ignored cbmailservices category.
+	 * Startup is the only place this shows. Failures are ignored.
+	 *
+	 * @settings The merged module settings struct.
+	 */
+	private void function warnUnsentQueue( required struct settings ){
+		try {
+			if ( arguments.settings.deliveryMode != "queue" ) {
+				return;
+			}
+			var mailSettings = controller.getSetting( "moduleSettings" ).cbmailservices;
+			if ( mailSettings.keyExists( "runQueueTask" ) && !mailSettings.runQueueTask ) {
+				createObject( "java", "java.lang.System" ).out.println(
+					"errorAlerts: deliveryMode is ""queue"" but cbmailservices runQueueTask is false, so queued alerts will never be sent. Use deliveryMode ""send"" or turn the queue task on."
+				);
+			}
+		} catch ( any e ) {
+		}
 	}
 
 	/**

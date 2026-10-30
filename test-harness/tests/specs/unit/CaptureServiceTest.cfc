@@ -37,11 +37,101 @@ component extends="tests.resources.BaseUnitSpec" {
 				capture.$property( propertyName = "payloadBuilder", mock = builderStub );
 				capture.$property( propertyName = "threadClassifier", mock = threadStub );
 				capture.setNotifier( notifierStub );
+
+				// The timeout extension depends on the engine. Specs that test it choose one.
+				capture.$( "currentEngine", "" );
 			} );
 
 			it( "notifies once on a SEND verdict", function(){
 				capture.capture( newLogEvent() );
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+			} );
+
+			describe( "capture() result", function(){
+				/* captureException() records an exception as reported only when
+				 * capture() returns true. Skips are decisions and return true; only a
+				 * failed alert returns false, so onError() can retry it. */
+
+				it( "returns true when the alert is sent", function(){
+					expect( capture.capture( newLogEvent() ) ).toBeTrue();
+				} );
+
+				it( "returns true for a SUPPRESS verdict", function(){
+					throttleStub.$( "record", { action : "SUPPRESS", occurrence : 4, expiredDigest : {} } );
+					expect( capture.capture( newLogEvent() ) ).toBeTrue();
+				} );
+
+				it( "returns true when the module is disabled", function(){
+					settings.enabled = false;
+					expect( capture.capture( newLogEvent() ) ).toBeTrue();
+				} );
+
+				it( "returns true for an ignored category", function(){
+					expect( capture.capture( newLogEvent( category = "cbmailservices.mail" ) ) ).toBeTrue();
+				} );
+
+				it( "returns true for a duplicate framework log", function(){
+					var result = capture.capture(
+						newLogEvent(
+							message   = "Error calling quotes.index: boom detail",
+							extraInfo = newRestHandlerExtraInfo()
+						)
+					);
+					expect( result ).toBeTrue();
+				} );
+
+				it( "returns false when the notifier throws", function(){
+					notifierStub.$(
+						method         = "sendNotification",
+						throwException = true,
+						throwType      = "errorAlerts.DeliveryFailed",
+						throwMessage   = "email delivery failed"
+					);
+					expect( capture.capture( newLogEvent() ) ).toBeFalse();
+				} );
+
+				it( "returns false when the alert cannot be built", function(){
+					builderStub.$(
+						method         = "build",
+						throwException = true,
+						throwType      = "BuildDown",
+						throwMessage   = "build exploded"
+					);
+					expect( capture.capture( newLogEvent() ) ).toBeFalse();
+				} );
+
+				it( "still sends the alert and returns true when the digest cannot be built", function(){
+					throttleStub.$( "record", {
+						action        : "SEND",
+						occurrence    : 1,
+						expiredDigest : { signature : "sig-1", suppressedCount : 9 }
+					} );
+					builderStub.$(
+						method         = "buildDigest",
+						throwException = true,
+						throwType      = "DigestDown",
+						throwMessage   = "digest exploded"
+					);
+
+					expect( capture.capture( newLogEvent() ) ).toBeTrue();
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 1, "the alert still went out" );
+				} );
+
+				it( "returns true when only the digest delivery fails", function(){
+					throttleStub.$( "record", {
+						action        : "SEND",
+						occurrence    : 1,
+						expiredDigest : { signature : "sig-1", suppressedCount : 9 }
+					} );
+					notifierStub.$( "sendNotification" ).$callback( function( payload ){
+						if ( arguments.payload.type == "digest" ) {
+							throw( type = "errorAlerts.DeliveryFailed", message = "digest delivery failed" );
+						}
+					} );
+
+					expect( capture.capture( newLogEvent() ) ).toBeTrue();
+					expect( notifierStub.$count( "sendNotification" ) ).toBe( 2 );
+				} );
 			} );
 
 			it( "stays silent on a SUPPRESS verdict", function(){
@@ -278,10 +368,225 @@ component extends="tests.resources.BaseUnitSpec" {
 					// Every spec shares one runner request, so clear the per-request state.
 					structDelete( request, "_errorAlertsReported" );
 					structDelete( request, "_errorAlertsCapturing" );
+					structDelete( request, "_errorAlertsTimeoutExtended" );
+				} );
+
+				afterEach( function(){
+					structDelete( request, "_errorAlertsTimeoutExtended" );
+				} );
+
+				describe( "retry after a failed alert", function(){
+					it( "sends the same exception again after its first alert failed", function(){
+						var state = { calls : 0 };
+						notifierStub.$( "sendNotification" ).$callback( function(){
+							state.calls++;
+							if ( state.calls == 1 ) {
+								throw( type = "errorAlerts.DeliveryFailed", message = "email delivery failed" );
+							}
+						} );
+
+						capture.captureException( newExceptionInfo() );
+						capture.captureException( newExceptionInfo() );
+						capture.captureException( newExceptionInfo() );
+
+						expect( state.calls ).toBe( 2, "the retry sent, and the call after that success was dropped" );
+					} );
+
+					it( "retries after a notifier failure of any type", function(){
+						var state = { calls : 0 };
+						notifierStub.$( "sendNotification" ).$callback( function(){
+							state.calls++;
+							if ( state.calls == 1 ) {
+								throw( type = "NotifierDown", message = "custom notifier exploded" );
+							}
+						} );
+
+						capture.captureException( newExceptionInfo() );
+						capture.captureException( newExceptionInfo() );
+
+						expect( state.calls ).toBe( 2 );
+					} );
+
+					it( "records the exception as reported whenever capture() returns true", function(){
+						// capture() also returns true for deliberate skips such as an ignored type.
+						capture.$( "capture", true );
+
+						capture.captureException( newExceptionInfo() );
+						capture.captureException( newExceptionInfo() );
+
+						expect( capture.$count( "capture" ) ).toBe( 1 );
+					} );
+				} );
+
+				describe( "request timeout extension on Adobe", function(){
+					/* Adobe throws the timeout again at every later checking tag once the
+					 * request is past its limit, so captureException() extends the limit
+					 * first. Its limit is measured from the start of the request. */
+
+					beforeEach( function(){
+						capture.$( "currentEngine", "adobe" );
+						capture.$( "adobeRequestTimeoutSeconds", 2 );
+						capture.$( "applyRequestTimeout" );
+					} );
+
+					it( "does nothing while the request is within its limit", function(){
+						capture.$( "adobeRequestTimedOut", false );
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 0 );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "adds the extension to the current limit", function(){
+						capture.$( "adobeRequestTimedOut" ).$results( true, false );
+
+						capture.captureException( newExceptionInfo() );
+
+						var applied = capture.$callLog().applyRequestTimeout;
+						expect( applied.len() ).toBe( 1 );
+						expect( applied[ 1 ][ 1 ] ).toBe( 62 );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "doubles the limit until the request is within it, then extends once more", function(){
+						// One long query can run far past the limit, so limit + 60 can already be over.
+						capture.$( "adobeRequestTimedOut" ).$results( true, true, true, false );
+
+						capture.captureException( newExceptionInfo() );
+
+						var applied  = capture.$callLog().applyRequestTimeout;
+						var expected = [ 62, 124, 248, 308 ];
+						expect( applied.len() ).toBe( expected.len() );
+						for ( var i = 1; i <= expected.len(); i++ ) {
+							expect( applied[ i ][ 1 ] ).toBe( expected[ i ], "limit #i#" );
+						}
+					} );
+
+					it( "stops doubling after the probe limit", function(){
+						capture.$( "adobeRequestTimedOut", true );
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 22, "the first limit, 20 doublings, and the final extension" );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "extends a request at most once", function(){
+						capture.$( "adobeRequestTimedOut" ).$results( true, false );
+
+						capture.captureException( newExceptionInfo( line = 1 ) );
+						capture.captureException( newExceptionInfo( line = 2 ) );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 1 );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 2 );
+					} );
+
+					it( "does nothing when the extension is below one second", function(){
+						capture.$( "adobeRequestTimedOut", true );
+
+						settings.timeoutExtensionSeconds = 0;
+						capture.captureException( newExceptionInfo( line = 1 ) );
+						settings.timeoutExtensionSeconds = 0.5;
+						capture.captureException( newExceptionInfo( line = 2 ) );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 0, "a limit of 0 would remove the time limit" );
+						expect( capture.$count( "adobeRequestTimedOut" ) ).toBe( 0, "the cheap checks run first" );
+					} );
+
+					it( "does nothing on BoxLang, which does not enforce the limit", function(){
+						capture.$( "currentEngine", "boxlang" );
+						capture.$( "adobeRequestTimedOut", true );
+						capture.$( "luceeElapsedMs", 999999 );
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( capture.$count( "adobeRequestTimedOut" ) ).toBe( 0 );
+						expect( capture.$count( "luceeElapsedMs" ) ).toBe( 0 );
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 0 );
+					} );
+
+					it( "still sends the alert when the extension fails", function(){
+						capture.$(
+							method         = "adobeRequestTimedOut",
+							throwException = true,
+							throwType      = "MonitorDown",
+							throwMessage   = "no request monitor"
+						);
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "does not extend for an abort", function(){
+						capture.$( "adobeRequestTimedOut", true );
+
+						capture.captureException( newAbortInfo( "coldfusion.runtime.AbortException" ) );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 0 );
+					} );
+				} );
+
+				describe( "request timeout extension on Lucee", function(){
+					/* Lucee's controller thread stops a timed-out request, then stops it
+					 * again on a later pass while onError() is still reporting the first
+					 * timeout. That second stop is an abort no catch can handle. */
+
+					beforeEach( function(){
+						capture.$( "currentEngine", "lucee" );
+						capture.$( "luceeRequestTimeoutMs", 2000 );
+						capture.$( "applyRequestTimeout" );
+						capture.$( "adobeRequestTimedOut", true );
+					} );
+
+					it( "does nothing while the request is within its limit", function(){
+						capture.$( "luceeElapsedMs", 1500 );
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 0 );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "sets the limit to the elapsed time plus the extension", function(){
+						// One long call ran far past the 2-second limit.
+						capture.$( "luceeElapsedMs", 95200 );
+
+						capture.captureException( newExceptionInfo() );
+
+						var applied = capture.$callLog().applyRequestTimeout;
+						expect( applied.len() ).toBe( 1 );
+						expect( applied[ 1 ][ 1 ] ).toBe( 156, "96 seconds elapsed, rounded up, plus 60" );
+						expect( capture.$count( "adobeRequestTimedOut" ) ).toBe( 0, "Adobe's monitor is never touched" );
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
+
+					it( "extends a request at most once", function(){
+						capture.$( "luceeElapsedMs", 2100 );
+
+						capture.captureException( newExceptionInfo( line = 1 ) );
+						capture.captureException( newExceptionInfo( line = 2 ) );
+
+						expect( capture.$count( "applyRequestTimeout" ) ).toBe( 1 );
+					} );
+
+					it( "still sends the alert when the page context cannot be read", function(){
+						capture.$(
+							method         = "luceeElapsedMs",
+							throwException = true,
+							throwType      = "NoPageContext",
+							throwMessage   = "no page context"
+						);
+
+						capture.captureException( newExceptionInfo() );
+
+						expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
+					} );
 				} );
 
 				it( "builds the unhandled-exception LogEvent and captures it", function(){
-					capture.$( "capture" );
+					capture.$( "capture", true );
 					var info = newExceptionInfo();
 
 					capture.captureException( info );
@@ -381,7 +686,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				} );
 
 				it( "unwraps Adobe's EventHandlerException wrapper", function(){
-					capture.$( "capture" );
+					capture.$( "capture", true );
 					var real = newExceptionInfo();
 
 					capture.captureException( {
@@ -397,7 +702,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				} );
 
 				it( "keeps an ordinary exception unchanged when it has a rootCause", function(){
-					capture.$( "capture" );
+					capture.$( "capture", true );
 					var info      = newExceptionInfo();
 					info.type     = "Database";
 					info.rootCause = { type : "java.sql.SQLException", message : "driver detail" };
@@ -443,6 +748,20 @@ component extends="tests.resources.BaseUnitSpec" {
 				throttleStub.$( "flushExpired", [ { signature : "a" }, { signature : "b" } ] );
 				capture.flushDigests();
 				expect( notifierStub.$count( "sendNotification" ) ).toBe( 2 );
+			} );
+
+			it( "flushDigests still sends the other digests when one cannot be built", function(){
+				throttleStub.$( "flushExpired", [ { signature : "a" }, { signature : "b" } ] );
+				builderStub.$( "buildDigest" ).$callback( function( seed ){
+					if ( arguments.seed.signature == "a" ) {
+						throw( type = "DigestDown", message = "digest exploded" );
+					}
+					return { type : "digest" };
+				} );
+
+				capture.flushDigests();
+
+				expect( notifierStub.$count( "sendNotification" ) ).toBe( 1 );
 			} );
 
 			it( "resolves the configured notifier through WireBox (the swap seam)", function(){

@@ -83,6 +83,9 @@ component {
 				subjectPrefix : "[Harness]",
 				// Send immediately so tests can inspect mail without waiting.
 				deliveryMode  : "send",
+				/* Short, so /trigger/requestTimeout?overshoot=5 runs past limit + extension
+				 * without a minute-long wait. A naive "limit + extension" fails that case. */
+				timeoutExtensionSeconds : 3,
 				/* Keep this override partial to test that module startup restores rc,
 				 * cgi, and extraInfo defaults. session keeps its normal false value. */
 				includeScopes : { session : false },

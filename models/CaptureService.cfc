@@ -35,6 +35,12 @@ component singleton accessors="true" {
 		// Match the exception types that engines use for aborts and redirects.
 		variables.ABORT_TYPE_PATTERN = "(^|\.)Abort(Exception)?$";
 
+		// Double the request limit at most this many times while it is still exceeded.
+		variables.MAX_TIMEOUT_PROBES = 20;
+
+		// Cap failure text written to System.err. cbmailservices includes full stack traces.
+		variables.MAX_FAILURE_TEXT = 500;
+
 		return this;
 	}
 
@@ -49,20 +55,29 @@ component singleton accessors="true" {
 	 * appender and interceptor. For example, a development() override may disable
 	 * the module. Direct calls must still respect that setting.
 	 *
+	 * Returns false only when the event's own alert failed: this method's catch
+	 * ran, or the notifier threw. Deliberate skips return true because they are
+	 * decisions, not failures: disabled, ignored, a duplicate framework log, or
+	 * suppressed by the throttle. A failed digest does not count, because the
+	 * digest window is already gone and a retry would only repeat the alert.
+	 * captureException() uses the result to decide whether a retry may send.
+	 * The throttle has already counted a failed attempt, so a retry is the next
+	 * occurrence. The appender ignores the result.
+	 *
 	 * @logEvent The LogBox LogEvent to process.
 	 */
-	void function capture( required any logEvent ){
+	boolean function capture( required any logEvent ){
 		try {
 			if ( !settings.enabled ) {
-				return;
+				return true;
 			}
 
 			if ( isIgnored( arguments.logEvent ) ) {
-				return;
+				return true;
 			}
 
 			if ( isDuplicateFrameworkLog( arguments.logEvent ) ) {
-				return;
+				return true;
 			}
 
 			var signature = signatureService.compute( arguments.logEvent );
@@ -72,14 +87,17 @@ component singleton accessors="true" {
 			);
 
 			if ( !verdict.expiredDigest.isEmpty() ) {
-				dispatch( payloadBuilder.buildDigest( verdict.expiredDigest ) );
+				sendDigest( verdict.expiredDigest );
 			}
 
-			if ( verdict.action == "SEND" ) {
-				dispatch( payloadBuilder.build( arguments.logEvent, signature, verdict.occurrence ) );
+			if ( verdict.action != "SEND" ) {
+				return true;
 			}
+
+			return dispatch( payloadBuilder.build( arguments.logEvent, signature, verdict.occurrence ) );
 		} catch ( any e ) {
-			variables.system.err.println( "errorAlerts capture failed: #e.message# #e.detail#" );
+			variables.system.err.println( "errorAlerts capture failed: " & failureText( e ) );
+			return false;
 		}
 	}
 
@@ -98,8 +116,13 @@ component singleton accessors="true" {
 	 *
 	 * Track reported errors to prevent a second report of the same exception
 	 * within a request. This covers a handler that rethrows an exception already
-	 * reported by the interceptor, causing onError() to run. The request flag
-	 * prevents this method from running again while a capture is in progress.
+	 * reported by the interceptor, causing onError() to run. Record an exception
+	 * only after capture() succeeds, so onError() can retry one whose first
+	 * alert failed. The request flag prevents this method from running again
+	 * while a capture is in progress.
+	 *
+	 * Extend a request that is already past its time limit before anything
+	 * else runs. See extendTimedOutRequest().
 	 *
 	 * @exception The cfcatch struct or exception object to report.
 	 */
@@ -114,6 +137,7 @@ component singleton accessors="true" {
 				return;
 			}
 
+			extendTimedOutRequest();
 			ensureModuleMappings();
 
 			if ( !request.keyExists( "_errorAlertsReported" ) ) {
@@ -123,15 +147,17 @@ component singleton accessors="true" {
 			if ( request._errorAlertsReported.keyExists( key ) ) {
 				return;
 			}
-			if ( structCount( request._errorAlertsReported ) < variables.MAX_REPORTED_PER_REQUEST ) {
-				request._errorAlertsReported[ key ] = true;
-			}
 
+			var captured = false;
 			request._errorAlertsCapturing = true;
 			try {
-				capture( newUnhandledEvent( target ) );
+				captured = capture( newUnhandledEvent( target ) );
 			} finally {
 				request.delete( "_errorAlertsCapturing" );
+			}
+
+			if ( captured && structCount( request._errorAlertsReported ) < variables.MAX_REPORTED_PER_REQUEST ) {
+				request._errorAlertsReported[ key ] = true;
 			}
 		} catch ( any e ) {
 			variables.system.err.println( "errorAlerts captureException failed: #e.message# #e.detail#" );
@@ -147,7 +173,7 @@ component singleton accessors="true" {
 		try {
 			var seeds = throttleService.flushExpired();
 			for ( var seed in seeds ) {
-				dispatch( payloadBuilder.buildDigest( seed ) );
+				sendDigest( seed );
 			}
 		} catch ( any e ) {
 			variables.system.err.println( "errorAlerts digest flush failed: #e.message# #e.detail#" );
@@ -307,6 +333,181 @@ component singleton accessors="true" {
 			coldbox.getModuleService().loadMappings();
 		} catch ( any e ) {
 		}
+	}
+
+	/**
+	 * extendTimedOutRequest
+	 *
+	 * Gives a request that is already past its time limit enough time to send
+	 * the alert and render the application's error page. Both engines that
+	 * enforce the limit measure it from the start of the request, so adding
+	 * seconds to the current limit is not enough when one long query ran well
+	 * past it. The limit only grows.
+	 *
+	 * - Adobe throws the timeout again at every later cfoutput, cfquery or
+	 *   cfmail. See extendAdobeRequest().
+	 * - Lucee stops the request from a controller thread, and stops it again
+	 *   on a later pass, while onError() is still reporting the first timeout.
+	 *   That second stop is an abort no catch can handle. See
+	 *   extendLuceeRequest().
+	 * - BoxLang does not enforce the limit, so it needs nothing.
+	 *
+	 * Runs at most once per request, and only when the request is past its
+	 * limit. That is false when the application already extended it. The
+	 * cheapest checks run first. A value below 1 turns this off, because a
+	 * limit of 0 would remove the request's time limit. Failures are ignored.
+	 */
+	private void function extendTimedOutRequest(){
+		try {
+			var extension = int( val( settings.timeoutExtensionSeconds ) );
+			if ( extension < 1 || request.keyExists( "_errorAlertsTimeoutExtended" ) ) {
+				return;
+			}
+
+			var engine   = currentEngine();
+			var extended = false;
+			if ( engine == "adobe" ) {
+				extended = extendAdobeRequest( extension );
+			} else if ( engine == "lucee" ) {
+				extended = extendLuceeRequest( extension );
+			}
+
+			if ( extended ) {
+				request._errorAlertsTimeoutExtended = true;
+			}
+		} catch ( any e ) {
+		}
+	}
+
+	/**
+	 * extendAdobeRequest
+	 *
+	 * Extends an Adobe request that Adobe reports is past its limit, and
+	 * returns whether it did. Adobe's report is false when its timeout option
+	 * is off and in a cfthread. Adobe exposes no start time that matches its own
+	 * clock, so the limit is doubled until Adobe reports the request is within
+	 * it, then extended once more.
+	 *
+	 * @extension Whole seconds to leave after the current moment.
+	 */
+	private boolean function extendAdobeRequest( required numeric extension ){
+		if ( !adobeRequestTimedOut() ) {
+			return false;
+		}
+
+		var limit = max( adobeRequestTimeoutSeconds(), 1 ) + arguments.extension;
+		applyRequestTimeout( limit );
+
+		var probes = 0;
+		while ( probes < variables.MAX_TIMEOUT_PROBES && adobeRequestTimedOut() ) {
+			probes++;
+			limit = limit * 2;
+			applyRequestTimeout( limit );
+		}
+
+		// The request is now within the limit. Leave a full extension after it.
+		if ( probes > 0 ) {
+			limit = limit + arguments.extension;
+			applyRequestTimeout( limit );
+		}
+
+		return true;
+	}
+
+	/**
+	 * extendLuceeRequest
+	 *
+	 * Extends a Lucee request that is past its limit, and returns whether it
+	 * did. Lucee's controller compares the page context's start time plus its
+	 * limit with the clock, so the elapsed time is exact here.
+	 *
+	 * @extension Whole seconds to leave after the current moment.
+	 */
+	private boolean function extendLuceeRequest( required numeric extension ){
+		var elapsedMs = luceeElapsedMs();
+		if ( elapsedMs <= luceeRequestTimeoutMs() ) {
+			return false;
+		}
+
+		var limit = ceiling( elapsedMs / 1000 ) + arguments.extension;
+		applyRequestTimeout( limit );
+		return true;
+	}
+
+	/**
+	 * currentEngine
+	 *
+	 * Returns "adobe", "lucee", "boxlang", or an empty string. ThreadClassifier
+	 * caches the engine name. A separate method, so specs can choose the engine.
+	 */
+	private string function currentEngine(){
+		return threadClassifier.engineName();
+	}
+
+	/**
+	 * luceeElapsedMs
+	 *
+	 * Returns how long the Lucee request has run, on the clock Lucee's
+	 * controller uses. A separate method, so specs can stub it.
+	 */
+	private numeric function luceeElapsedMs(){
+		return getTickCount() - getPageContext().getStartTime();
+	}
+
+	/**
+	 * luceeRequestTimeoutMs
+	 *
+	 * Returns the Lucee request's limit in milliseconds. A separate method, so
+	 * specs can stub it.
+	 */
+	private numeric function luceeRequestTimeoutMs(){
+		return getPageContext().getRequestTimeout();
+	}
+
+	/**
+	 * adobeRequestTimedOut
+	 *
+	 * Returns Adobe's own answer to whether the request is past its limit. A
+	 * separate method, so specs can stub it.
+	 */
+	private boolean function adobeRequestTimedOut(){
+		return requestMonitor().isRequestTimedOut();
+	}
+
+	/**
+	 * adobeRequestTimeoutSeconds
+	 *
+	 * Returns the request's current limit in seconds. A separate method, so
+	 * specs can stub it.
+	 */
+	private numeric function adobeRequestTimeoutSeconds(){
+		return requestMonitor().getRequestTimeout();
+	}
+
+	/**
+	 * applyRequestTimeout
+	 *
+	 * Sets the request's limit, measured from the start of the request, on
+	 * Adobe and Lucee. On Adobe the setting statement updates both places the
+	 * limit is stored. A separate method, so specs can record the values.
+	 *
+	 * @seconds The new limit in whole seconds.
+	 */
+	private void function applyRequestTimeout( required numeric seconds ){
+		setting requestTimeout = arguments.seconds;
+	}
+
+	/**
+	 * requestMonitor
+	 *
+	 * Returns Adobe's coldfusion.runtime.RequestMonitor class, created once.
+	 * Only Adobe code paths call this.
+	 */
+	private any function requestMonitor(){
+		if ( !variables.keyExists( "requestMonitorClass" ) ) {
+			variables.requestMonitorClass = createObject( "java", "coldfusion.runtime.RequestMonitor" );
+		}
+		return variables.requestMonitorClass;
 	}
 
 	/**
@@ -574,15 +775,53 @@ component singleton accessors="true" {
 	 * dispatch
 	 *
 	 * Sends one payload without allowing notifier failures into the request.
+	 * Returns false when the notifier threw. A notifier reports a failed
+	 * delivery by throwing; EmailNotifier throws errorAlerts.DeliveryFailed.
+	 * This is the only place a notifier failure is printed.
 	 *
 	 * @payload The notification payload from PayloadBuilder.
 	 */
-	private void function dispatch( required struct payload ){
+	private boolean function dispatch( required struct payload ){
 		try {
 			getNotifier().sendNotification( arguments.payload );
+			return true;
 		} catch ( any e ) {
-			variables.system.err.println( "errorAlerts notifier failed: #e.message# #e.detail#" );
+			variables.system.err.println( "errorAlerts notifier failed: " & failureText( e ) );
+			return false;
 		}
+	}
+
+	/**
+	 * sendDigest
+	 *
+	 * Builds and sends one digest. A failure is printed and goes no further,
+	 * so it cannot stop the alert sent alongside it or the next digest.
+	 *
+	 * @seed The expired window from ThrottleService.
+	 */
+	private void function sendDigest( required struct seed ){
+		try {
+			dispatch( payloadBuilder.buildDigest( arguments.seed ) );
+		} catch ( any e ) {
+			variables.system.err.println( "errorAlerts digest failed: " & failureText( e ) );
+		}
+	}
+
+	/**
+	 * failureText
+	 *
+	 * Returns an exception's message and detail for System.err, capped so a
+	 * stack trace in the detail cannot flood the log.
+	 *
+	 * @error The caught exception.
+	 */
+	private string function failureText( required any error ){
+		var text = "";
+		try {
+			text = "#arguments.error.message# #arguments.error.detail#";
+		} catch ( any e ) {
+		}
+		return text.left( variables.MAX_FAILURE_TEXT );
 	}
 
 }

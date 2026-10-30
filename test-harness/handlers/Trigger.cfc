@@ -306,6 +306,47 @@ component {
 	}
 
 	/**
+	 * requestTimeout
+	 *
+	 * Runs past a 2-second request limit. Adobe checks the limit only at some
+	 * tags, such as cfoutput, so the loop includes a template with an empty
+	 * cfoutput. After the limit passes, every later checking tag throws again,
+	 * including the ones in the error page.
+	 *
+	 * Lucee stops the request from a separate thread instead. BoxLang does not
+	 * enforce the limit, so the loop's own deadline throws there.
+	 *
+	 * rc.overshoot sleeps that many seconds past the limit before the first
+	 * check, like one long query. sleep() is a function, so it never checks the
+	 * limit itself.
+	 *
+	 * @event The current request context.
+	 * @rc    The request collection.
+	 * @prc   The private request collection.
+	 */
+	function requestTimeout( event, rc, prc ){
+		setting requestTimeout = 2;
+
+		var overshoot = val( rc.overshoot ?: 0 );
+		if ( overshoot > 0 ) {
+			sleep( ( 2 + overshoot ) * 1000 );
+		}
+
+		// Keep the loop small. Building strings here can exhaust the heap.
+		var deadline = getTickCount() + 30000;
+		while ( getTickCount() < deadline ) {
+			sleep( 200 );
+			include "/root/views/trigger/timeoutTick.cfm";
+		}
+
+		throw(
+			type    = "Harness.Timeout.NeverFired",
+			message = "The 2-second request limit never fired",
+			detail  = "This engine did not stop the request. BoxLang does not enforce requestTimeout. On Adobe, check that the administrator's Timeout Requests option is on."
+		);
+	}
+
+	/**
 	 * noSuchAction
 	 *
 	 * Sends the request to an action this handler does not have.

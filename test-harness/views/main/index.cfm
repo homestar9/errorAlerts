@@ -29,6 +29,8 @@
 				{ route : "/trigger/fileNotFound", note : "Reads a file that is not there." },
 				{ route : "/trigger/httpFailure", note : "cfhttp to a closed port with throwOnError." },
 				{ route : "/trigger/timeoutError", note : "The shape of a slow-dependency timeout." },
+				{ route : "/trigger/requestTimeout", note : "Runs past a 2-second request limit. Adobe throws the timeout again at the next tag, including in the error page. Lucee reaches only onError(). BoxLang does not enforce the limit and throws Harness.Timeout.NeverFired.", skipAll : true },
+				{ route : "/trigger/requestTimeout?overshoot=5", note : "Sleeps 5 seconds past the limit before the first check, like one long query.", skipAll : true },
 				{ route : "/trigger/noSuchAction", note : "Real handler, action that was never written." },
 				{ route : "/trigger/invalidEvent", note : "Handler that does not exist at all." },
 				{ route : "/api/boom", note : "Throws inside a RestHandler, which logs and announces the same exception. One email." },

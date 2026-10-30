@@ -237,6 +237,10 @@ Check these items in order:
 4. Confirm your engine or configured cbmailservices mailer can send a normal email.
 5. Check the server console and error logs for messages beginning with `errorAlerts`.
 
+On Lucee, a request timeout skips ColdBox and is only reported through
+`Application.cfc`'s `onError()`. See
+[request timeouts](docs/reference.md#request-timeouts).
+
 Email is queued by default. Repeated errors may wait for a digest instead of
 producing another separate email. See [troubleshooting](docs/reference.md#troubleshooting)
 for delivery delays, ignored errors, and missing digests.

@@ -172,6 +172,33 @@ An alert for a legacy page shows a `coldbox` row with "not a ColdBox request"
 instead of routing rows. Its request collection (`rc`) combines posted fields
 from `FORM` with query string fields from `URL`.
 
+**Request timeouts.** `/trigger/requestTimeout` sets `requestTimeout = 2`, then
+loops on `sleep( 200 )` and an include of `views/trigger/timeoutTick.cfm`, whose
+empty `cfoutput` is a tag Adobe checks the limit at. `?overshoot=5` first sleeps
+five seconds past the limit, like one long query; `sleep()` is a function and
+never checks the limit itself. A 30-second deadline throws
+`Harness.Timeout.NeverFired` if the engine never stops the request. Both rows
+have `skipAll : true` because they are slow. The harness sets
+`timeoutExtensionSeconds : 3` so the overshoot case runs past the original limit
+plus the extension without a minute-long wait.
+
+What these scenarios showed in October 2026, with 2.9.0 and then with the fix:
+
+| Engine | 2.9.0 | With the extension |
+| --- | --- | --- |
+| Adobe 2023 | Two alerts: the interceptor's, then a second from `onError()` after the `cfoutput` in `Whoops.cfm` threw the timeout again. The `onError()` page replaced ColdBox's error page. The timeout's `type` is `Application`. | One alert, and the Whoops page renders, for both the plain and the overshoot case. Adding the extension to the current limit, without accounting for time already spent, failed the overshoot case exactly as 2.9.0 did. |
+| Lucee 6.2 | No alert, every time. The timeout is an abort, so it skips ColdBox and reaches only `onError()`. Lucee's controller then stopped the request again inside `onError()`, while the module was reading a source snippet. The overshoot case happened to alert. The `type` is `expression`. | One alert from `onError()`. Under load, about one run in fifteen still loses the alert: the second stop can land before `onError()` reaches the module. |
+| BoxLang 1.15 | `requestTimeout` is never enforced. The loop runs to its deadline and `NeverFired` alerts through ColdBox as an ordinary error. | Unchanged. |
+
+`tests/specs/integration/RequestTimeoutTest.cfc` fires both scenarios over HTTP
+and reads the harness mailbox through `/main/mailbox`, which returns the active
+mailer, the email count and the subjects as JSON. The runner is a separate
+application, so it cannot read the harness mailbox directly. On Lucee the spec
+allows three attempts because of the race above. It is skipped on BoxLang. Its
+`beforeAll()` renders the error page once first: with only 3 extra seconds, the
+first Whoops render on a freshly started Adobe server can spend that time
+compiling the template.
+
 ## What a run on Adobe 2023 showed
 
 Findings from firing the whole catalog, worth knowing before you read your own
