@@ -83,7 +83,7 @@
 			scenarios   : [
 				{ route : "/trigger/maskedRc?password=hunter2&api_key=sk-live-abc&token=xyz&orderId=88213", note : "Secrets in rc should read *** masked ***. orderId should stay readable." },
 				{ route : "/trigger/nestedSecrets", note : "Nested secrets and a ~400KB base64 blob in extraInfo. Nested keys masked; the blob clipped with a size label; the alert builds without a pause." },
-				{ route : "/trigger/messyRc", note : "Binary, a nested struct, a component and long text in rc." },
+				{ route : "/trigger/messyRc", note : "Binary, a nested struct holding a component, a component, a closure and long text in rc." },
 				{ route : "/trigger/htmlInjection", note : "Markup in the message. It should show as literal text." },
 				{ route : "/trigger/unicode", note : "Accented Latin, CJK and emoji." },
 				{ route : "/trigger/hugeMessage", note : "250KB message and detail. Each section clips long before maxBodyBytes, so the email lands around 12KB." },
@@ -95,6 +95,7 @@
 			description : "These .cfm files under /legacy/ run without ColdBox, as older pages might. Application.cfc's onError() reports their errors through CaptureService.captureException(). The alert category is UnhandledException. The Request section shows a coldbox row instead of routing details. The request collection (rc) combines posted form fields and URL query string fields.",
 			scenarios   : [
 				{ route : "/legacy/boom.cfm?password=hunter2&orderId=88213", note : "Throws an error from a page outside ColdBox. The password value should show *** masked ***. The orderId value should be visible. The origin should be /legacy/boom.cfm." },
+				{ route : "/legacy/functionInUrl.cfm", note : "Copies a UDF, a closure, an arrow function, a component method and a struct holding a closure and a component into url, then throws. The rc table should show [function] and [object ...] markers, and the error page should return at once. Before 2.9.1 this request never returned on Adobe." },
 				{ route : "/legacy/undefinedVariable.cfm", note : "Reads a variable that was never set, so the engine's own error reaches onError()." },
 				{ route : "/legacy/postForm.cfm", note : "Submits a POST request. The alert's request collection (rc) should show the posted fields.", method : "POST" },
 				{ route : "/legacy/startFail.cfm", note : "Throws an error in Application.cfc's onRequestStart(). On Adobe, the email must show the original error type, Harness.StartFail." },

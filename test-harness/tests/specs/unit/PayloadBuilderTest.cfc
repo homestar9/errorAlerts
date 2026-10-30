@@ -305,7 +305,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.extraInfo ).notToInclude( "bottom" );
 			} );
 
-			it( "passes queries and objects through the walk unchanged", function(){
+			it( "passes queries through the walk and replaces objects with a marker", function(){
 				var data    = queryNew( "id,name", "integer,varchar", [ [ 1, "Ada" ] ] );
 				var payload = builder.build(
 					newLogEvent( extraInfo = { result : data, note : "with a query" } ),
@@ -314,15 +314,21 @@ component extends="tests.resources.BaseUnitSpec" {
 				);
 				expect( payload.extraInfo ).toInclude( "Ada", "query data keeps its diagnostic value" );
 
+				var withXml = builder.build(
+					newLogEvent( extraInfo = { doc : xmlParse( "<order><id>xml-kept</id></order>" ), note : "with XML" } ),
+					"sig-1",
+					1
+				);
+				expect( withXml.extraInfo ).toInclude( "xml-kept", "XML keeps its content" );
+
 				var withObject = builder.build(
 					newLogEvent( extraInfo = { helper : new coldbox.system.logging.LogLevels(), note : "with an object" } ),
 					"sig-1",
 					1
 				);
-				expect( withObject.extraInfo ).notToInclude(
-					"[object",
-					"objects go to the serializer untouched, not to a marker"
-				);
+				expect( withObject.extraInfo ).toInclude( "[object ", "an object becomes a marker, never serialized" );
+				expect( withObject.extraInfo ).toInclude( "LogLevels]", "the marker names the component" );
+				expect( withObject.extraInfo ).toInclude( "with an object", "sibling values stay readable" );
 			} );
 
 			it( "keeps the other keys when one value cannot be serialized", function(){
@@ -361,6 +367,101 @@ component extends="tests.resources.BaseUnitSpec" {
 				} );
 
 				expect( builder.stringify( { orderId : 1 }, 2000 ) ).toBe( "[unserializable value]" );
+			} );
+
+			/* On Adobe, serializeJSON() on a function or a Java object can walk its
+			 * bean properties forever. GuardedPayloadBuilder's toJson() counts such a
+			 * value instead of serializing it, so a regression fails here instead of
+			 * hanging the run. Expectations only ever receive strings: see markerOf(). */
+			describe( "with functions and objects in the data", function(){
+				beforeEach( function(){
+					builder = prepareMock( new tests.resources.fixtures.GuardedPayloadBuilder() );
+					builder.$property( propertyName = "settings", mock = settings );
+					builder.$property( propertyName = "coldbox", mock = newControllerStub() );
+					builder.$property( propertyName = "frameClassifier", mock = classifier );
+					builder.$property( propertyName = "threadClassifier", mock = threadClassifier );
+					makePublic( builder, "sanitizeValue" );
+					makePublic( builder, "sanitizeDeep" );
+				} );
+
+				it( "reports a function at the top of rc as a marker", function(){
+					var closure = function(){
+						return "never called";
+					};
+					var arrow = () => "never called";
+
+					expect( builder.sanitizeValue( "sysOut", variables.fixtureUdf ) ).toBe( "[function]" );
+					expect( builder.sanitizeValue( "callback", closure ) ).toBe( "[function]" );
+					expect( builder.sanitizeValue( "arrow", arrow ) ).toBe( "[function]" );
+					expect( builder.getGuardHits() ).toBe( 0, "no function reached the serializer" );
+				} );
+
+				it( "masks a function under a masked key", function(){
+					settings.maskKeys = [ "sysOut" ];
+
+					expect( builder.sanitizeValue( "sysOut", variables.fixtureUdf ) ).toBe( "*** masked ***" );
+				} );
+
+				it( "reports nested functions and objects as markers", function(){
+					var clean = builder.sanitizeDeep( {
+						"outer"     : { "inner" : { "helper" : variables.fixtureUdf } },
+						"callbacks" : [ function(){ return 1; }, () => 2 ],
+						"levels"    : new coldbox.system.logging.LogLevels(),
+						"lock"      : createObject( "java", "java.util.concurrent.locks.ReentrantLock" ).init(),
+						"note"      : "kept"
+					} );
+
+					expect( markerOf( clean.outer.inner.helper ) ).toBe( "[function]" );
+					expect( markerOf( clean.callbacks[ 1 ] ) ).toBe( "[function]" );
+					expect( markerOf( clean.callbacks[ 2 ] ) ).toBe( "[function]" );
+					expect( markerOf( clean.levels ) ).toInclude( "LogLevels]" );
+					expect( markerOf( clean.lock ) ).toInclude( "[object" );
+					expect( markerOf( clean.note ) ).toBe( "kept" );
+				} );
+
+				it( "keeps the message of a caught exception nested in extraInfo", function(){
+					settings.extraInfoMaxLength = 100000;
+					var caught = "";
+					try {
+						throw( type = "Fixture.Nested", message = "nested failure text" );
+					} catch ( any e ) {
+						caught = e;
+					}
+
+					var payload = builder.build( newLogEvent( extraInfo = { "error" : caught, "orderId" : 7 } ), "sig-1", 1 );
+
+					expect( payload.extraInfo ).toInclude( "nested failure text" );
+					expect( builder.getGuardHits() ).toBe( 0, "nothing unsafe reached the serializer" );
+				} );
+
+				it( "builds an alert with functions and objects in rc and a function as extraInfo", function(){
+					var rc = structNew( "ordered" );
+					rc[ "sysOut" ]   = variables.fixtureUdf;
+					rc[ "callback" ] = () => "never called";
+					rc[ "filters" ]  = {
+						"status"    : "active",
+						"formatter" : function( value ){ return arguments.value; },
+						"service"   : new coldbox.system.logging.LogLevels()
+					};
+					rc[ "orderId" ] = "88213";
+					builder.$property( propertyName = "coldbox", mock = newControllerStub( rc ) );
+
+					// LogBox never calls an extraInfo closure, so log.error( "x", () => 1 ) passes one as is.
+					var payload = builder.build(
+						newLogEvent( extraInfo = function(){ return "never called"; } ),
+						"sig-1",
+						1
+					);
+
+					expect( payload.rc.sysOut ).toBe( "[function]" );
+					expect( payload.rc.callback ).toBe( "[function]" );
+					expect( payload.rc.filters ).toInclude( "[function]" );
+					expect( payload.rc.filters ).toInclude( "LogLevels]" );
+					expect( payload.rc.filters ).toInclude( "active", "data next to a function stays readable" );
+					expect( payload.rc.orderId ).toBe( "88213" );
+					expect( payload.extraInfo ).toBe( "[function]" );
+					expect( builder.getGuardHits() ).toBe( 0, "nothing unsafe reached the serializer" );
+				} );
 			} );
 
 			it( "respects an extraInfoMaxLength override", function(){
@@ -990,6 +1091,32 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload ).toHaveKey( "machine", "the digest names the server that flushed it" );
 			} );
 		} );
+	}
+
+	/**
+	 * fixtureUdf
+	 *
+	 * A component method the function-value specs store as data, like an
+	 * application that copies a UDF into the url scope.
+	 */
+	private string function fixtureUdf(){
+		return "never called";
+	}
+
+	/**
+	 * markerOf
+	 *
+	 * Returns a sanitized value when it is a string, or a fixed note otherwise.
+	 * TestBox may serialize an actual value to describe a failed match, so an
+	 * expectation must never receive a live function or object.
+	 *
+	 * @value The sanitized value to check, may be null.
+	 */
+	private string function markerOf( any value ){
+		if ( isNull( arguments.value ) ) {
+			return "[null value]";
+		}
+		return isSimpleValue( arguments.value ) ? toString( arguments.value ) : "[not a string]";
 	}
 
 	/**

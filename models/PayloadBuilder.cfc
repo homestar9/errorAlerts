@@ -1373,6 +1373,7 @@ component singleton accessors="true" {
 	 * maskKeyPatterns provides optional wildcard matching.
 	 *
 	 * Complex values pass through sanitizeNode() so nested keys are also checked.
+	 * Functions and objects become markers there, after the mask check.
 	 * A null value becomes a placeholder instead of causing the rc table to fail.
 	 *
 	 * @key   The scope key, checked against the masking configuration.
@@ -1383,18 +1384,6 @@ component singleton accessors="true" {
 
 		if ( isNull( arguments.value ) ) {
 			return "[null]";
-		}
-
-		if ( isObject( arguments.value ) ) {
-			// Some objects report isStruct(), so exclude objects before walking data.
-			if ( isMasked( arguments.key ) ) {
-				return variables.MASK_TOKEN;
-			}
-			try {
-				return "[object #getMetadata( arguments.value ).name#]";
-			} catch ( any e ) {
-				return "[object]";
-			}
 		}
 
 		var clean = sanitizeNode(
@@ -1412,8 +1401,9 @@ component singleton accessors="true" {
 	 * sanitizeDeep
 	 *
 	 * Returns a copy with matching keys masked at every visited level.
-	 * The method walks structs and arrays. Objects and queries stay unchanged and
-	 * are handled later by the serializer and output limit.
+	 * The method walks structs and arrays. Functions and objects become markers.
+	 * Queries and XML stay unchanged and are handled later by the serializer and
+	 * output limit.
 	 *
 	 * RestHandler can place request headers inside extraInfo. This walk prevents
 	 * a configured secret field from bypassing the Request section's checks.
@@ -1441,8 +1431,9 @@ component singleton accessors="true" {
 	 * Recursively converts one value to content that can be included in email.
 	 * A matching key becomes the mask token before its value is read. Strings use
 	 * sanitizeString(). Structs and arrays stop at the depth or character limit.
-	 * Omitted entries are counted without being read. Objects, queries, and other
-	 * values pass through to the caller's serializer.
+	 * Omitted entries are counted without being read. Functions and objects
+	 * become markers from valueMarker(). Queries and XML pass through to the
+	 * caller's serializer.
 	 *
 	 * A failed node becomes a placeholder. Other values can still be included.
 	 *
@@ -1499,11 +1490,19 @@ component singleton accessors="true" {
 			}
 
 			/* Check isObject() first because some objects also report isStruct().
-			 * Objects, queries, XML, and other values pass through to the final
-			 * serializer and length limit. */
+			 * Only queries and XML reach the serializer from here. On Adobe,
+			 * serializeJSON() walks a function or a Java object through its bean
+			 * properties with no cycle check, which can run forever. Use
+			 * isXmlNode(), which is true for documents too: Adobe 2023's isXML()
+			 * throws on a component. */
 			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
-				arguments.state.remaining -= variables.NODE_OVERHEAD;
-				return arguments.value;
+				if ( isQuery( arguments.value ) || isXmlNode( arguments.value ) ) {
+					arguments.state.remaining -= variables.NODE_OVERHEAD;
+					return arguments.value;
+				}
+				var marker = valueMarker( arguments.value );
+				arguments.state.remaining -= arguments.keyName.len() + marker.len() + variables.NODE_OVERHEAD;
+				return marker;
 			}
 
 			var clean     = structNew( "ordered" );
@@ -1562,6 +1561,44 @@ component singleton accessors="true" {
 
 		arguments.state.remaining -= arguments.keyName.len() + kept.len() + variables.NODE_OVERHEAD;
 		return kept;
+	}
+
+	/**
+	 * valueMarker
+	 *
+	 * Returns a short marker for a function, an object, or another value the
+	 * walk must not serialize. An exception keeps its type and message, which
+	 * matters on Adobe, where a caught exception nested in extraInfo can be an
+	 * object rather than a struct.
+	 *
+	 * The marker reads only the type name or the exception fields. Never expand
+	 * the object or call getMemento(): on an ORM entity that can run queries
+	 * and recurse while the application is already handling an error.
+	 *
+	 * isCustomFunction() covers UDFs, closures, and arrow functions on every
+	 * engine. isClosure() misses arrow functions on Lucee and BoxLang.
+	 *
+	 * @value The value to describe, any type.
+	 */
+	private string function valueMarker( required any value ){
+		if ( isCustomFunction( arguments.value ) ) {
+			return "[function]";
+		}
+
+		try {
+			if ( structKeyExists( arguments.value, "message" ) && structKeyExists( arguments.value, "stacktrace" ) ) {
+				var type = structKeyExists( arguments.value, "type" ) ? toString( arguments.value.type ) : "";
+				return "[exception #type#: #toString( arguments.value.message ).left( 200 )#]";
+			}
+		} catch ( any e ) {
+			// The value is not an exception or its fields cannot be read.
+		}
+
+		try {
+			return "[object #getMetadata( arguments.value ).name#]";
+		} catch ( any e ) {
+			return "[object]";
+		}
 	}
 
 	/**

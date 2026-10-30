@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A function or an object in the request data no longer risks hanging an
+  alert on Adobe ColdFusion.** This covers a UDF, closure, or arrow function, a
+  component, or a Java object in `rc`, `url`, `form` or `extraInfo`, at any
+  depth. Adobe's `serializeJSON()` walks such a value through its Java bean
+  properties with no cycle check. An application that set
+  `url.sysOut = sysOut` on every request had requests that never returned and
+  ran at full CPU until the server was killed, and the request timeout could
+  not stop them.
+  - The alert now shows a short marker on every engine. A function reads
+    `[function]` and an object reads `[object Name]`, the marker a top-level
+    `rc` object already used. A caught exception nested in `extraInfo` reads
+    `[exception Type: message]`.
+  - Queries and XML are serialized as before.
+  - A masked key still shows `*** masked ***`.
+  - Before this fix, Lucee and BoxLang printed a long metadata dump for each
+    function, and the alert showed a component's properties. Neither is shown
+    now.
+  - Workaround on 2.9.0: add the key that holds the function to `maskKeys`.
+
 ## [2.9.0] - 2026-10-29
 
 ### Added
