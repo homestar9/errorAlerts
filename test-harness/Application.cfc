@@ -92,6 +92,9 @@ component {
 	this.mappings[ "/moduleroot" ]            = moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] = modulePath;
 
+	// Make sysOut() a method of this component for functionInUrl.cfm.
+	include "legacy/udf/sysOut.cfm";
+
 	/**
 	 * onApplicationStart
 	 *
@@ -129,6 +132,14 @@ component {
 				message = "Thrown from onRequestStart for a legacy page",
 				detail  = "Adobe passes this error to onError() inside an EventHandlerException."
 			);
+		}
+
+		/* Copy one of this component's methods into url for functionInUrl.cfm. An
+		 * application that includes a UDF file into Application.cfc and sets
+		 * url.sysOut = sysOut does the same. Before 2.9.1, Adobe's serializeJSON()
+		 * never returned on such a method; a page UDF serializes quickly. */
+		if ( arguments.targetPage.findNoCase( "/legacy/functionInUrl.cfm" ) ) {
+			url.appSysOut = sysOut;
 		}
 
 		application.cbBootstrap.onRequestStart( arguments.targetPage );

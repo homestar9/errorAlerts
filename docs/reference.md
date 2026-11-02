@@ -61,6 +61,7 @@ stack frames and source information needed for the alert.
 | `includeScopes` | `{ rc: true, cgi: true, extraInfo: true, session: false }` | Includes the request collection, CGI details, extra log data, or session ID. |
 | `userProvider` | `""` | Function that receives WireBox and returns text identifying the signed-in user. |
 | `includeQueryParams` | `true` | Includes bound SQL values for database errors. These values are not key-masked. |
+| `includeXmlMarkup` | `true` | Shows XML in `rc` or `extraInfo` as its markup, clipped like any long value. Element names inside it are not key-masked. `false` shows only the root element name, such as `[xml order]`. |
 | `includeHeaders` | `[ "Content-Type" ]` | Request headers to show, without case sensitivity. |
 | `includeRequestBody` | `false` | Includes non-form request bodies. See the masking limits below. |
 | `maskQueryString` | `true` | Applies masking rules to query string values. |
@@ -238,6 +239,8 @@ Key masking needs a field name. It cannot remove secrets from:
 - Error messages, exception `detail`, or exception `extendedInfo`.
 - Bound SQL values. Set `includeQueryParams : false` to omit those values.
 - Plain strings, XML, or other non-JSON request bodies.
+- Element names inside an XML value in `rc` or `extraInfo`. Masking applies only to
+  the key that holds it. Set `includeXmlMarkup : false` to show only the root element name.
 - Fields inside component instances, Java objects, or query rows.
 - Client IP addresses listed in digests. Set `digestSampleSize : 0` to omit the lists.
 

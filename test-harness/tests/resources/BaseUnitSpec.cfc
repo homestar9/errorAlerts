@@ -58,6 +58,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			userProvider         : "",
 			relativePaths        : true,
 			includeQueryParams   : true,
+			includeXmlMarkup     : true,
 			maskQueryString      : true,
 			emptyValueText       : "N/A",
 			includeHeaders       : [ "Content-Type" ],

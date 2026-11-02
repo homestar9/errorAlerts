@@ -821,9 +821,11 @@ component {
 		rc.binaryBlob = toBinary( toBase64( repeatString( "x", 512 ) ) );
 		rc.nested     = {
 			customer : { id : 4471, name : "Ada Lovelace", tags : [ "vip", "beta" ] },
-			totals   : { subTotal : 129.99, tax : 10.40, grand : 140.39 }
+			totals   : { subTotal : 129.99, tax : 10.40, grand : 140.39 },
+			service  : getInstance( "OrderService" )
 		};
 		rc.component  = getInstance( "OrderService" );
+		rc.callback   = () => "never called";
 		rc.emptyValue = "";
 		rc.aNumber    = 42;
 		rc.aBoolean   = true;
@@ -832,7 +834,7 @@ component {
 		throw(
 			type    = "Harness.Rc.MixedTypes",
 			message = "Failure with mixed value types in the request collection",
-			detail  = "Long text should be clipped, the blob should read as binary bytes, the component should read as an object name, and the nested struct should be serialized."
+			detail  = "Long text should be clipped, the blob should read as binary bytes, the component should read as an object name, the callback should read [function], and the nested struct should be serialized with its service as an object marker."
 		);
 	}
 

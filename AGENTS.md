@@ -95,11 +95,34 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - `build()` calls `ensureMaskConfig()` once per alert; everything downstream uses `ensureCompiled()`,
   which only compiles when nothing has been compiled yet. Do not put the fingerprint check back on a
   per-key path - it made a wide `rc` rebuild the fingerprint once per key.
-- Objects and queries pass through the walk untouched by design, so keys inside them are never
-  mask-checked. Do not "fix" this by calling `getMemento()`: on a Quick or cborm entity that method
-  can run database queries through relationships, recurse without a depth cap, and throw, none of
-  which is acceptable inside error handling. The `rc` table's `[object com.foo.Bar]` marker is a
-  rendering limit for a short-string column, not a different masking policy.
+- Functions and objects never reach the serializer. `sanitizeNode()`'s passthrough branch turns them
+  into `valueMarker()` text: `[function]`, `[object com.foo.Bar]`, or `[exception Type: message]`.
+  Only queries pass through. Adobe's `serializeJSON()` walks an unknown value through its
+  Java bean getters with no cycle check, and the request timeout cannot interrupt it. A UDF in `url`
+  hung an application's requests this way (2.9.1). Whether it hangs depends on the function's scope
+  graph: every function the harness tried came out as a finite bean dump, so a fast harness run on
+  Adobe does not prove a change safe. Lucee and BoxLang write a metadata dump with recursion guards.
+  - Detect functions with `isCustomFunction()`. `isClosure()` misses arrow functions on Lucee and
+    BoxLang. For a function, `isObject()`, `isStruct()` and `isSimpleValue()` are false everywhere.
+  - XML becomes its markup, minus the `<?xml ...?>` declaration, and goes through
+    `sanitizeString()`'s caps like any string. The check sits before the array and struct branches
+    because BoxLang reports a document as an array whose items throw when read, and Lucee reports
+    XML as a struct with no text. Detect it with `isXmlNode()`, which is also true for a document:
+    Adobe 2023's `isXML()` throws "Complex object types cannot be converted to simple values" on a
+    component or a query. Element names inside the markup are not checked against `maskKeys`, the
+    same limit as a non-JSON request body. `includeXmlMarkup : false` replaces the markup with
+    `xmlMarker()`'s `[xml rootName]`, which never calls `toString()`. BoxLang may indent the
+    markup, so specs match parts of it.
+  - Never expand an object, and never call `getMemento()`: on a Quick or cborm entity it can run
+    database queries through relationships, recurse without a depth cap, and throw, none of which is
+    acceptable inside error handling.
+  - A query is still serialized in full before the output cap clips it. That is a known gap in the
+    budget promise.
+  - Specs must never hand a live function or object to `serializeJSON()`, `debug()`, a TestBox
+    failure message or a MockBox `$()` stub (`normalizeArguments()` serializes arguments). Use
+    `tests/resources/fixtures/GuardedPayloadBuilder.cfc`, whose `toJson()` counts such a value
+    instead. In the harness, never log a function in `extraInfo`: ColdBox's console appender
+    serializes it itself.
 - `stringify()` retries a struct key by key when serializing it as a whole fails, so one value the
   engine refuses cannot discard the entire section. `toJson()` exists as a separate method purely so
   specs can force that failure without depending on an engine-specific unserializable value.
