@@ -168,6 +168,16 @@ throw an error. Adobe passes that error to `onError()` inside an
 error. `abortPage.cfm` calls `location()` and then `abort`. This page must send
 no email on any engine.
 
+`functionInUrl.cfm` copies several functions and objects into `url`, then
+throws: a page UDF, a closure, an arrow function, a component method, and a
+struct holding a closure and a WireBox component. `Application.cfc` also
+includes `legacy/udf/sysOut.cfm` and copies that method into `url`. This matches
+the application that found the 2.9.1 bug. The error page must return at once.
+The alert's `rc` must show `[function]` and `[object models.OrderService]`, not
+a long dump of the function's metadata. On Adobe 2023, none of these functions
+reproduced the original hang before the fix. Adobe dumped each one as a finite
+set of Java bean properties.
+
 An alert for a legacy page shows a `coldbox` row with "not a ColdBox request"
 instead of routing rows. Its request collection (`rc`) combines posted fields
 from `FORM` with query string fields from `URL`.

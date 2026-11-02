@@ -128,6 +128,11 @@ component {
 			 * query error. They may also contain user input that maskKeys cannot hide
 			 * because the values have no field names. */
 			includeQueryParams   : true,
+			/* Show XML found in rc or extraInfo as its markup, clipped like any long
+			 * value. maskKeys checks the key that holds the XML but not the element
+			 * names inside it. Set this to false to show only the root element name,
+			 * such as [xml order]. */
+			includeXmlMarkup     : true,
 			// Apply the masking settings to query-string fields. Turning this off may
 			// expose a secret from a GET request.
 			maskQueryString      : true,
