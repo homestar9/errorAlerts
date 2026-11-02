@@ -97,18 +97,22 @@ page and how to send its alert emails to a local SMTP server so you can read the
   per-key path - it made a wide `rc` rebuild the fingerprint once per key.
 - Functions and objects never reach the serializer. `sanitizeNode()`'s passthrough branch turns them
   into `valueMarker()` text: `[function]`, `[object com.foo.Bar]`, or `[exception Type: message]`.
-  Only queries and XML pass through. Adobe's `serializeJSON()` walks an unknown value through its
+  Only queries pass through. Adobe's `serializeJSON()` walks an unknown value through its
   Java bean getters with no cycle check, and the request timeout cannot interrupt it. A UDF in `url`
   hung an application's requests this way (2.9.1). Whether it hangs depends on the function's scope
   graph: every function the harness tried came out as a finite bean dump, so a fast harness run on
   Adobe does not prove a change safe. Lucee and BoxLang write a metadata dump with recursion guards.
   - Detect functions with `isCustomFunction()`. `isClosure()` misses arrow functions on Lucee and
     BoxLang. For a function, `isObject()`, `isStruct()` and `isSimpleValue()` are false everywhere.
-  - Detect XML with `isXmlNode()`, which is also true for a document. Adobe 2023's `isXML()` throws
-    "Complex object types cannot be converted to simple values" on a component or a query.
-    Only Adobe reaches that check with XML. Lucee reports XML as a struct, so the walk keeps the
-    element names and drops the text. BoxLang reports XML as an array whose items throw when
-    read, so it becomes `[value could not be sanitized]`. Both predate 2.9.1.
+  - XML becomes its markup, minus the `<?xml ...?>` declaration, and goes through
+    `sanitizeString()`'s caps like any string. The check sits before the array and struct branches
+    because BoxLang reports a document as an array whose items throw when read, and Lucee reports
+    XML as a struct with no text. Detect it with `isXmlNode()`, which is also true for a document:
+    Adobe 2023's `isXML()` throws "Complex object types cannot be converted to simple values" on a
+    component or a query. Element names inside the markup are not checked against `maskKeys`, the
+    same limit as a non-JSON request body. `includeXmlMarkup : false` replaces the markup with
+    `xmlMarker()`'s `[xml rootName]`, which never calls `toString()`. BoxLang may indent the
+    markup, so specs match parts of it.
   - Never expand an object, and never call `getMemento()`: on a Quick or cborm entity it can run
     database queries through relationships, recurse without a depth cap, and throw, none of which is
     acceptable inside error handling.

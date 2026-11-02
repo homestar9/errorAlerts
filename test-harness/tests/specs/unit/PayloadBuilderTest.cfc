@@ -314,17 +314,6 @@ component extends="tests.resources.BaseUnitSpec" {
 				);
 				expect( payload.extraInfo ).toInclude( "Ada", "query data keeps its diagnostic value" );
 
-				var withXml = builder.build(
-					newLogEvent( extraInfo = { doc : xmlParse( "<order><id>xml-kept</id></order>" ), note : "with XML" } ),
-					"sig-1",
-					1
-				);
-				// Engines disagree on what the walk sees. Adobe passes XML through with its text. Lucee
-				// reports it as a struct, so the walk keeps element names but drops the text. BoxLang
-				// reports it as an array whose items cannot be read, so it becomes the placeholder.
-				expect( withXml.extraInfo ).notToInclude( "[object", "XML is never replaced with a marker" );
-				expect( withXml.extraInfo ).toInclude( "with XML", "sibling values stay readable" );
-
 				var withObject = builder.build(
 					newLogEvent( extraInfo = { helper : new coldbox.system.logging.LogLevels(), note : "with an object" } ),
 					"sig-1",
@@ -333,6 +322,39 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( withObject.extraInfo ).toInclude( "[object ", "an object becomes a marker, never serialized" );
 				expect( withObject.extraInfo ).toInclude( "LogLevels]", "the marker names the component" );
 				expect( withObject.extraInfo ).toInclude( "with an object", "sibling values stay readable" );
+			} );
+
+			it( "reports XML as its markup, limited like any other string", function(){
+				// BoxLang reports a document as an array and Lucee reports XML as a struct, so a walk
+				// that reached either branch lost the text.
+				var payload = builder.build(
+					newLogEvent( extraInfo = { doc : xmlParse( "<order><id>xml-kept</id></order>" ), note : "with XML" } ),
+					"sig-1",
+					1
+				);
+				expect( payload.extraInfo ).toInclude( "xml-kept", "XML keeps its text" );
+				expect( payload.extraInfo ).toInclude( "order", "XML keeps its element names" );
+				expect( payload.extraInfo ).notToInclude( "[value could not be sanitized]" );
+				expect( payload.extraInfo ).toInclude( "with XML", "sibling values stay readable" );
+
+				var big     = xmlParse( "<order><notes>#repeatString( "x", 5000 )#</notes></order>" );
+				var clipped = builder.build( newLogEvent( extraInfo = { doc : big } ), "sig-1", 1 );
+				expect( clipped.extraInfo ).toInclude( "[truncated,", "long XML is clipped at the per-value cap" );
+				expect( clipped.extraInfo ).notToInclude( repeatString( "x", 1000 ) );
+			} );
+
+			it( "reports XML by its root element only when includeXmlMarkup is off", function(){
+				settings.includeXmlMarkup = false;
+				var doc     = xmlParse( "<order><card>4111-secret</card></order>" );
+				var payload = builder.build(
+					newLogEvent( extraInfo = { doc : doc, node : doc.xmlRoot.card, note : "with XML" } ),
+					"sig-1",
+					1
+				);
+				expect( payload.extraInfo ).toInclude( "[xml order]", "a document is named by its root element" );
+				expect( payload.extraInfo ).toInclude( "[xml card]", "a node is named by itself" );
+				expect( payload.extraInfo ).notToInclude( "4111-secret", "no XML content is shown" );
+				expect( payload.extraInfo ).toInclude( "with XML", "sibling values stay readable" );
 			} );
 
 			it( "keeps the other keys when one value cannot be serialized", function(){
@@ -447,6 +469,7 @@ component extends="tests.resources.BaseUnitSpec" {
 						"formatter" : function( value ){ return arguments.value; },
 						"service"   : new coldbox.system.logging.LogLevels()
 					};
+					rc[ "feed" ]    = xmlParse( "<feed><id>xml-kept</id></feed>" );
 					rc[ "orderId" ] = "88213";
 					builder.$property( propertyName = "coldbox", mock = newControllerStub( rc ) );
 
@@ -462,6 +485,9 @@ component extends="tests.resources.BaseUnitSpec" {
 					expect( payload.rc.filters ).toInclude( "[function]" );
 					expect( payload.rc.filters ).toInclude( "LogLevels]" );
 					expect( payload.rc.filters ).toInclude( "active", "data next to a function stays readable" );
+					// BoxLang may indent the markup, so match its parts rather than the exact text.
+					expect( payload.rc.feed ).toInclude( "xml-kept", "XML becomes its markup" );
+					expect( payload.rc.feed.left( 6 ) ).toBe( "<feed>", "the XML declaration is dropped" );
 					expect( payload.rc.orderId ).toBe( "88213" );
 					expect( payload.extraInfo ).toBe( "[function]" );
 					expect( builder.getGuardHits() ).toBe( 0, "nothing unsafe reached the serializer" );

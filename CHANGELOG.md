@@ -21,7 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `[function]` and an object reads `[object Name]`, the marker a top-level
     `rc` object already used. A caught exception nested in `extraInfo` reads
     `[exception Type: message]`.
-  - Queries and XML are serialized as before.
+  - Queries are serialized as before.
+- **XML in the request data or `extraInfo` now shows its markup on every
+  engine.** BoxLang showed `[value could not be sanitized]` and Lucee kept only
+  the element names. The markup is clipped like any other long value. Masking
+  applies to the key that holds the XML, not to element names inside it.
+
+### Added
+
+- **`includeXmlMarkup`** (default `true`). Set it to `false` to show XML as its
+  root element name only, such as `[xml order]`, with none of its content.
   - A masked key still shows `*** masked ***`.
   - Before this fix, Lucee and BoxLang printed a long metadata dump for each
     function, and the alert showed a component's properties. Neither is shown

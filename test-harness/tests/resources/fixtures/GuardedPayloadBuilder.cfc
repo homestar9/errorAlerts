@@ -53,8 +53,8 @@ component extends="errorAlerts.models.PayloadBuilder" {
 	/**
 	 * isSafe
 	 *
-	 * Checks that a value holds only simple values, arrays, plain structs,
-	 * queries and XML. Never reads a property of a function or an object.
+	 * Checks that a value holds only simple values, arrays, plain structs and
+	 * queries. Never reads a property of a function or an object.
 	 *
 	 * @value The value to check, any type, may be null.
 	 * @depth The current nesting level. The walk itself stops at 5.
@@ -66,9 +66,13 @@ component extends="errorAlerts.models.PayloadBuilder" {
 		if ( isCustomFunction( arguments.value ) ) {
 			return false;
 		}
-		// isXmlNode() is true for documents too. Adobe 2023's isXML() throws on a component.
-		if ( isQuery( arguments.value ) || isXmlNode( arguments.value ) ) {
+		if ( isQuery( arguments.value ) ) {
 			return true;
+		}
+		// The walk turns XML into its markup, so XML here means it skipped that step. Check it
+		// before arrays and structs: BoxLang reports a document as an array, Lucee as a struct.
+		if ( isXmlNode( arguments.value ) ) {
+			return false;
 		}
 		if ( isObject( arguments.value ) || arguments.depth > 20 ) {
 			return false;

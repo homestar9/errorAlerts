@@ -1401,9 +1401,9 @@ component singleton accessors="true" {
 	 * sanitizeDeep
 	 *
 	 * Returns a copy with matching keys masked at every visited level.
-	 * The method walks structs and arrays. Functions and objects become markers.
-	 * Queries and XML stay unchanged and are handled later by the serializer and
-	 * output limit.
+	 * The method walks structs and arrays. XML becomes its markup. Functions and
+	 * objects become markers. Queries stay unchanged and are handled later by the
+	 * serializer and output limit.
 	 *
 	 * RestHandler can place request headers inside extraInfo. This walk prevents
 	 * a configured secret field from bypassing the Request section's checks.
@@ -1431,9 +1431,9 @@ component singleton accessors="true" {
 	 * Recursively converts one value to content that can be included in email.
 	 * A matching key becomes the mask token before its value is read. Strings use
 	 * sanitizeString(). Structs and arrays stop at the depth or character limit.
-	 * Omitted entries are counted without being read. Functions and objects
-	 * become markers from valueMarker(). Queries and XML pass through to the
-	 * caller's serializer.
+	 * Omitted entries are counted without being read. XML becomes its markup,
+	 * limited like any string. Functions and objects become markers from
+	 * valueMarker(). Queries pass through to the caller's serializer.
 	 *
 	 * A failed node becomes a placeholder. Other values can still be included.
 	 *
@@ -1470,6 +1470,18 @@ component singleton accessors="true" {
 			if ( isSimpleValue( arguments.value ) ) {
 				return sanitizeString( arguments.keyName, toString( arguments.value ), arguments.state, arguments.depth );
 			}
+			/* Check XML before the array and struct branches. BoxLang reports a
+			 * document as an array whose items throw when read, and Lucee reports
+			 * XML as a struct with no text. toString() gives the markup on every
+			 * engine, and the string caps then bound it. Use isXmlNode(), which is
+			 * true for documents too: Adobe 2023's isXML() throws on a component.
+			 * The declaration is dropped because it only uses up the cap. */
+			if ( isXmlNode( arguments.value ) ) {
+				var xmlText = settingOr( "includeXmlMarkup", true )
+				 ? toString( arguments.value ).reReplace( "^<\?xml[^>]*\?>\s*", "" )
+				 : xmlMarker( arguments.value );
+				return sanitizeString( arguments.keyName, xmlText, arguments.state, arguments.depth );
+			}
 
 			if ( isArray( arguments.value ) ) {
 				var cleanList  = [];
@@ -1490,13 +1502,11 @@ component singleton accessors="true" {
 			}
 
 			/* Check isObject() first because some objects also report isStruct().
-			 * Only queries and XML reach the serializer from here. On Adobe,
-			 * serializeJSON() walks a function or a Java object through its bean
-			 * properties with no cycle check, which can run forever. Use
-			 * isXmlNode(), which is true for documents too: Adobe 2023's isXML()
-			 * throws on a component. */
+			 * Only queries reach the serializer from here. On Adobe, serializeJSON()
+			 * walks a function or a Java object through its bean properties with no
+			 * cycle check, which can run forever. */
 			if ( isObject( arguments.value ) || !isStruct( arguments.value ) ) {
-				if ( isQuery( arguments.value ) || isXmlNode( arguments.value ) ) {
+				if ( isQuery( arguments.value ) ) {
 					arguments.state.remaining -= variables.NODE_OVERHEAD;
 					return arguments.value;
 				}
@@ -1598,6 +1608,23 @@ component singleton accessors="true" {
 			return "[object #getMetadata( arguments.value ).name#]";
 		} catch ( any e ) {
 			return "[object]";
+		}
+	}
+
+	/**
+	 * xmlMarker
+	 *
+	 * Returns a marker naming an XML value's root element, used when
+	 * includeXmlMarkup is off. Reads no text, attributes, or child elements.
+	 *
+	 * @value An XML document or node.
+	 */
+	private string function xmlMarker( required any value ){
+		try {
+			var node = isXmlDoc( arguments.value ) ? arguments.value.xmlRoot : arguments.value;
+			return "[xml #node.xmlName#]";
+		} catch ( any e ) {
+			return "[xml]";
 		}
 	}
 
