@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-11-02
+
 ### Fixed
 
 - **A function or an object in the request data no longer risks hanging an
