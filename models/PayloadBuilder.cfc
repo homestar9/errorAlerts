@@ -23,13 +23,11 @@ component singleton accessors="true" {
 	/**
 	 * init
 	 *
-	 * Creates the LogLevels helper and records the module's paths.
+	 * Sets the limits and records the module's paths.
 	 * callerFrame() uses the paths to skip this module's stack frames. The paths
 	 * are calculated because applications can install the module anywhere.
 	 */
 	function init(){
-		variables.logLevels = new coldbox.system.logging.LogLevels();
-
 		// Limit the search for an application frame on very large call stacks.
 		variables.MAX_SCAN_FRAMES = 100;
 
@@ -165,11 +163,29 @@ component singleton accessors="true" {
 	 * Returns the LogBox name for a severity.
 	 * Returns the original value when LogBox does not recognize it.
 	 *
+	 * The names mirror coldbox.system.logging.LogLevels, which is not created here.
+	 * On Adobe behind IIS, a scheduled task thread has the wrong web root, so a
+	 * "coldbox.*" path fails there unless the application maps /coldbox. The
+	 * digest-flush task is often the first code to build this component.
+	 *
 	 * @severity The numeric severity from the log event.
 	 */
 	private string function levelName( required any severity ){
-		var name = variables.logLevels.lookup( arguments.severity );
-		return isNull( name ) ? toString( arguments.severity ) : name;
+		switch ( arguments.severity ) {
+			case -1:
+				return "OFF";
+			case 0:
+				return "FATAL";
+			case 1:
+				return "ERROR";
+			case 2:
+				return "WARN";
+			case 3:
+				return "INFO";
+			case 4:
+				return "DEBUG";
+		}
+		return toString( arguments.severity );
 	}
 
 	/**

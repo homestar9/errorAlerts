@@ -41,6 +41,16 @@ confirmed fix for it.
   and prints it.
 - A digest that fails to build no longer stops the alert sent with it, or the
   other digests in a flush.
+- **The `errorAlerts-digest-flush` task no longer fails every minute on Adobe
+  ColdFusion behind IIS.** The error read `Error building:
+  PayloadBuilder@errorAlerts -> Could not find the ColdFusion component or
+  interface coldbox.system.logging.LogLevels`. A ColdBox scheduled task thread
+  there uses the wrong web root, so a `coldbox.*` path only resolves when the
+  application maps `/coldbox`. The task was often the first code to build
+  `PayloadBuilder` after a restart, so it failed until an error in a web request
+  built it. An alert for an error raised inside one of the application's own
+  scheduled tasks could be lost the same way. `PayloadBuilder` no longer creates
+  LogBox's `LogLevels`, and severity names are unchanged.
 
 ### Changed
 

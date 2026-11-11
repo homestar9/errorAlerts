@@ -213,6 +213,14 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - Adobe cannot parse a member call on a parenthesized expression such as
   `( a ? b : c ).left( 200 )`. Adobe reports this as a named-parameter error. Assign the expression's
   result to a variable first, then call the method on that variable.
+- Code that can run on a scheduled-task thread must not create a `coldbox.*` component at runtime
+  (`new coldbox.system...`, `createObject()`). On Adobe behind IIS, that thread has the wrong
+  web root, so only mapped paths resolve, and many flat-layout apps never map `/coldbox`. The
+  digest-flush task is often the first code to build `CaptureService` and its dependencies, so a
+  lookup in an `init()` fails every minute. `PayloadBuilder.levelName()` copies LogBox's level
+  names for this reason. `extends=` is fine because it resolves when the module loads. The one
+  known remaining lookup is `CaptureService.newUnhandledEvent()`, which only runs on request
+  threads today.
 
 ## Email rendering invariants
 
