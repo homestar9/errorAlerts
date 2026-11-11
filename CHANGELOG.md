@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-11-11
+
 These changes harden how errorAlerts behaves around request timeouts and failed
 deliveries. They came from a production timeout on Adobe 2023 whose alert never
 arrived. The cause of that lost alert is still unknown; nothing here is a
