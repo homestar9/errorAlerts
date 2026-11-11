@@ -4,9 +4,11 @@
  * Defines notification delivery. CaptureService passes an error or digest
  * payload from PayloadBuilder to sendNotification().
  *
- * Implementations must handle their own failures. They must not log failures at
- * ERROR because that can call ErrorAlertAppender again. CaptureService catches
- * any failure that still escapes.
+ * Report a failed delivery by throwing. CaptureService catches the exception,
+ * prints it to System.err, and treats the alert as not sent, so an
+ * Application.cfc onError() retry of the same exception can send it again.
+ * Each attempt counts toward throttle.maxPerWindow. Implementations must not
+ * log failures at ERROR because that can call ErrorAlertAppender again.
  */
 interface {
 

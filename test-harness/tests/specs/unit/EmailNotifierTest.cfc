@@ -15,6 +15,8 @@ component extends="tests.resources.BaseUnitSpec" {
 				captured = {};
 
 				mailStub        = createStub();
+				mailStub.$( "hasErrors", false );
+				mailStub.$( "getResultMessages", [] );
 				mailServiceStub = createStub();
 				mailServiceStub.$( "newMail" ).$callback( function(){
 					captured = arguments;
@@ -86,7 +88,7 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( mailServiceStub.$count( "newMail" ) ).toBe( 0, "no mail object is created" );
 			} );
 
-			it( "swallows mail failures instead of throwing into the request", function(){
+			it( "throws DeliveryFailed when the mail cannot be built, so CaptureService can retry", function(){
 				var brokenMailService = createStub();
 				brokenMailService.$(
 					method         = "newMail",
@@ -98,7 +100,75 @@ component extends="tests.resources.BaseUnitSpec" {
 
 				expect( function(){
 					notifier.sendNotification( newErrorPayload() );
+				} ).toThrow( type = "errorAlerts.DeliveryFailed", regex = "smtp exploded" );
+			} );
+
+			it( "throws DeliveryFailed when rendering fails", function(){
+				rendererStub.$(
+					method         = "renderError",
+					throwException = true,
+					throwType      = "RenderDown",
+					throwMessage   = "render exploded"
+				);
+
+				expect( function(){
+					notifier.sendNotification( newErrorPayload() );
+				} ).toThrow( type = "errorAlerts.DeliveryFailed" );
+			} );
+
+			it( "throws DeliveryFailed when queueing fails", function(){
+				settings.deliveryMode = "queue";
+				mailServiceStub.$(
+					method         = "queue",
+					throwException = true,
+					throwType      = "QueueDown",
+					throwMessage   = "queue exploded"
+				);
+
+				expect( function(){
+					notifier.sendNotification( newErrorPayload() );
+				} ).toThrow( type = "errorAlerts.DeliveryFailed" );
+			} );
+
+			it( "throws DeliveryFailed when send mode records a failed send", function(){
+				/* cbmailservices' send() never throws. It records the failure on the
+				 * mail object and logs it under an ignored category. */
+				settings.deliveryMode = "send";
+				mailStub.$( "hasErrors", true );
+				mailStub.$( "getResultMessages", [ "Error sending mail. connection refused" ] );
+
+				expect( function(){
+					notifier.sendNotification( newErrorPayload() );
+				} ).toThrow( type = "errorAlerts.DeliveryFailed", regex = "connection refused" );
+			} );
+
+			it( "caps the failure detail it throws", function(){
+				settings.deliveryMode = "send";
+				mailStub.$( "hasErrors", true );
+				mailStub.$( "getResultMessages", [ repeatString( "x", 5000 ) ] );
+
+				var thrown = {};
+				try {
+					notifier.sendNotification( newErrorPayload() );
+				} catch ( any e ) {
+					thrown = e;
+				}
+				expect( thrown.type ?: "" ).toBe( "errorAlerts.DeliveryFailed" );
+				expect( len( thrown.detail ) ).toBeLTE( 500 );
+			} );
+
+			it( "does not throw when send mode records no failure", function(){
+				settings.deliveryMode = "send";
+				expect( function(){
+					notifier.sendNotification( newErrorPayload() );
 				} ).notToThrow();
+				expect( mailStub.$count( "hasErrors" ) ).toBe( 1 );
+			} );
+
+			it( "does not read send results in queue mode", function(){
+				settings.deliveryMode = "queue";
+				notifier.sendNotification( newErrorPayload() );
+				expect( mailStub.$count( "hasErrors" ) ).toBe( 0, "a queued mail has no send result yet" );
 			} );
 		} );
 	}

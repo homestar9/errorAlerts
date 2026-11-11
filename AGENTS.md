@@ -150,9 +150,37 @@ page and how to send its alert emails to a local SMTP server so you can read the
   and interceptor. Direct calls must still respect the disabled setting. Keep the blank-`to` check
   in `EmailNotifier` too.
 - The request key `_errorAlertsCapturing` prevents capture from running again while a capture is
-  already in progress. `_errorAlertsReported` tracks errors already reported in the request. Every
-  spec in a run shares one runner request. Specs that call `captureException()` must clear both
-  keys first. Integration specs use `BaseIntegrationSpec.resetRequestState()` to clear them.
+  already in progress. `_errorAlertsReported` tracks errors already reported in the request, and
+  `_errorAlertsTimeoutExtended` records a timeout extension. Every spec in a run shares one runner
+  request. Specs that call `captureException()` must clear all three keys first. Integration specs
+  use `BaseIntegrationSpec.resetRequestState()` to clear them.
+- `captureException()` records an exception in `_errorAlertsReported` only after `capture()`
+  returns `true`, so an `onError()` retry can send an alert whose first attempt failed.
+  `capture()` returns `false` only when its own catch runs or the error alert's dispatch fails.
+  Deliberate skips (disabled, ignored, duplicate framework log, SUPPRESS) return `true`, and every
+  exit returns explicitly. A digest failure never makes it `false`: `sendDigest()` contains it,
+  and the digest window is already gone. A notifier reports a failed delivery by throwing.
+  `EmailNotifier` throws `errorAlerts.DeliveryFailed`, and in `send` mode it checks
+  `mail.hasErrors()`, because cbmailservices' `send()` never throws. `dispatch()` is the only place
+  a notifier failure is printed.
+- Request timeouts differ by engine, and `extendTimedOutRequest()` handles each:
+  - Adobe checks the limit at tags (`cfoutput`, `cfloop` tag, `cfquery`/`queryExecute`, `cffile`,
+    `cfhttp`, `cfmail`), never in script loops or function calls, and throws again at every later
+    check. The timeout's `type` is `Application` and its message is localized, so detect it with
+    `RequestMonitor.isRequestTimedOut()`, never by text.
+  - Lucee's controller thread stops the request with an abort that CFML catch blocks rethrow, so it
+    skips ColdBox and the interceptor and only reaches `onError()`. The controller then stops the
+    request again while `onError()` runs.
+  - BoxLang 1.15 stores `requestTimeout` but never enforces it.
+
+  Both enforcing engines measure the limit from the start of the request, so "current limit +
+  extension" is not enough after a long overshoot. On Lucee, use `getPageContext().getStartTime()`
+  and `getRequestTimeout()`, the controller's own clock. On Adobe, never use
+  `FusionContext.getStartTime()`: `setCurrent()` resets it, and includes call `setCurrent()`.
+  Probe with `isRequestTimedOut()` instead, doubling the limit. Extend once per request, only add
+  time, treat any value below 1 as off (a limit of 0 removes the limit), and never extend from
+  `capture()`, which would let code that caught a timeout keep running. Verify changes with
+  `/trigger/requestTimeout` and `?overshoot=5` on Adobe and Lucee.
 - Adobe puts errors from `Application.cfc` event methods inside an `EventHandlerException`, with
   the original error in `rootCause`. Adobe can also pass an abort to `onError()`. Lucee and BoxLang
   handle aborts elsewhere and use `cause` instead of `rootCause`. Only remove the
@@ -185,6 +213,14 @@ page and how to send its alert emails to a local SMTP server so you can read the
 - Adobe cannot parse a member call on a parenthesized expression such as
   `( a ? b : c ).left( 200 )`. Adobe reports this as a named-parameter error. Assign the expression's
   result to a variable first, then call the method on that variable.
+- Code that can run on a scheduled-task thread must not create a `coldbox.*` component at runtime
+  (`new coldbox.system...`, `createObject()`). On Adobe behind IIS, that thread has the wrong
+  web root, so only mapped paths resolve, and many flat-layout apps never map `/coldbox`. The
+  digest-flush task is often the first code to build `CaptureService` and its dependencies, so a
+  lookup in an `init()` fails every minute. `PayloadBuilder.levelName()` copies LogBox's level
+  names for this reason. `extends=` is fine because it resolves when the module loads. The one
+  known remaining lookup is `CaptureService.newUnhandledEvent()`, which only runs on request
+  threads today.
 
 ## Email rendering invariants
 

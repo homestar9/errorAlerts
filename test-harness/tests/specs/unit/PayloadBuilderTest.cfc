@@ -39,6 +39,12 @@ component extends="tests.resources.BaseUnitSpec" {
 				expect( payload.occurrence ).toBe( 2 );
 			} );
 
+			it( "names LogBox severities and passes unknown ones through", function(){
+				expect( builder.build( newLogEvent( severity = 0 ), "sig-1", 1 ).severity ).toBe( "FATAL" );
+				expect( builder.build( newLogEvent( severity = 2 ), "sig-1", 1 ).severity ).toBe( "WARN" );
+				expect( builder.build( newLogEvent( severity = 99 ), "sig-1", 1 ).severity ).toBe( "99" );
+			} );
+
 			it( "extracts the exception block and caps the stack frames", function(){
 				settings.stackFrames = 2;
 				var payload = builder.build( newLogEvent( extraInfo = newExceptionInfo() ), "sig-1", 1 );

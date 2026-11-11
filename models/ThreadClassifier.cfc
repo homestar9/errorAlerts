@@ -143,8 +143,9 @@ component singleton accessors="true" {
 	 * Returns "boxlang", "lucee", "adobe", or an empty string. Uses the same
 	 * checks as ColdBox's BaseProxy. BoxLang and Lucee also define
 	 * server.coldfusion, so their keys are checked first. The result is cached.
+	 * CaptureService uses it too, to run engine-specific request timeout code.
 	 */
-	private string function engineName(){
+	string function engineName(){
 		if ( variables.keyExists( "cachedEngineName" ) ) {
 			return variables.cachedEngineName;
 		}

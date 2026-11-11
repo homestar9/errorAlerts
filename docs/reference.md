@@ -8,6 +8,7 @@ Use this guide when you need more settings or a different reporting setup.
 - [Masking and request data](#masking-and-request-data)
 - [Repeated errors and digests](#repeated-errors-and-digests)
 - [Pages outside ColdBox](#pages-outside-coldbox)
+- [Request timeouts](#request-timeouts)
 - [Custom notifiers](#custom-notifiers)
 - [Troubleshooting](#troubleshooting)
 - [Upgrading](#upgrading)
@@ -28,6 +29,7 @@ Restart or reinitialize ColdBox after changing the configuration.
 | `subjectPrefix` | `""` | Text before the subject. Uses the ColdBox app name when blank. |
 | `notifier` | `"EmailNotifier@errorAlerts"` | WireBox mapping ID of the notification provider. |
 | `deliveryMode` | `"queue"` | `"queue"` sends in the background; `"send"` waits for delivery. |
+| `timeoutExtensionSeconds` | `60` | Extra seconds given to a request that is already past its time limit when an unhandled exception is reported, so the alert and the error page can finish. Adobe and Lucee only. `0` turns it off. See [Request timeouts](#request-timeouts). |
 | `levelMin` | `"FATAL"` | Start of the allowed LogBox level range. |
 | `levelMax` | `"ERROR"` | End of the allowed LogBox level range. Use `"WARN"` to include warnings. |
 
@@ -347,10 +349,50 @@ key. Masking rules still apply. `enabled` and environment overrides still apply
 too. A `userProvider` that needs a ColdBox request may fail; its row then shows
 `emptyValueText`.
 
-Keep queued delivery for these pages, especially after a request timeout.
 On Lucee and BoxLang, the method reloads module mappings before reporting the
 error, including when `onRequestStart()` failed before ColdBox ran. You do not
 need to reload those mappings yourself.
+
+## Request timeouts
+
+When a request runs past its time limit, the engine keeps interfering with the
+error handling that follows. Each engine behaves differently:
+
+- **Adobe ColdFusion** checks the limit at tags such as `cfoutput`, `cfquery`,
+  `cfhttp` and `cfmail`. Once the limit has passed, every later check throws the
+  timeout again, including the `cfoutput` in ColdBox's error template. The
+  re-thrown timeout escapes ColdBox. Adobe then shows its raw error page, or
+  calls `Application.cfc`'s `onError()` if you have one.
+- **Lucee** stops the request from a separate thread. The timeout is an abort, so
+  it skips ColdBox's exception handling, including the errorAlerts interceptor,
+  and only reaches `onError()`. Lucee then stops the request again while
+  `onError()` is still running.
+- **BoxLang** does not enforce `requestTimeout`.
+
+When `captureException()` receives an error from a request that is already past
+its limit, it raises the limit so that at least `timeoutExtensionSeconds` remain
+from that moment. The limit is measured from the start of the request, so the
+module accounts for time already spent, not just the original limit. It does
+this once per request, only adds time, and does nothing when the request is
+within its limit, for example when your application already extended it. The
+extra time also lets the application's error page render. Set
+`timeoutExtensionSeconds` to `0` to turn this off.
+
+What this means for your application:
+
+- **On Lucee, add the `onError()` block from
+  [Pages outside ColdBox](#pages-outside-coldbox)**, even if every page runs
+  through ColdBox. Without it, a request timeout is never reported.
+- On Lucee, a second stop can still arrive before `onError()` reaches the module,
+  so an occasional timeout alert can be lost. In the test harness this happened
+  in about one of fifteen runs under load; without the extension it happened
+  every time.
+- If your error page does slow work, such as queries, extend the limit yourself
+  at the top of `onError()` as well.
+- With `deliveryMode : "send"`, `cfmail` itself checks the limit on Adobe. The
+  extension lets that send finish. Before 2.10.0, a timeout inside `cfmail` was
+  recorded by cbmailservices and logged under an ignored category, so the alert
+  was lost without a trace.
 
 ## Custom notifiers
 
@@ -360,12 +402,9 @@ To send alerts somewhere other than email, create a singleton that implements
 ```cfc
 component singleton implements="errorAlerts.models.notifiers.INotifier" {
     void function sendNotification( required struct payload ){
-        try {
-            // Send payload to your alert service.
-            // payload.type is "error" or "digest".
-        } catch ( any exception ) {
-            // Handle delivery failures without throwing or logging at ERROR.
-        }
+        // Send payload to your alert service.
+        // payload.type is "error" or "digest".
+        // Throw if the delivery fails. Do not log the failure at ERROR.
     }
 }
 ```
@@ -376,10 +415,15 @@ Register the component in WireBox, then set its mapping ID:
 notifier : "MyNotifier"
 ```
 
-Custom notifiers do not require `to`. Handle their delivery failures without
-throwing into the request. Logging those failures at `ERROR` or `FATAL` can
-create another alert. See [PayloadBuilder.cfc](../models/PayloadBuilder.cfc) for
-the fields in error and digest payloads.
+Custom notifiers do not require `to`. Report a failed delivery by throwing.
+errorAlerts catches the exception, so it never reaches the request. It prints
+the failure to the server console and treats the alert as not sent, so an
+`onError()` call for the same exception later in the request can try again.
+Each attempt counts toward `throttle.maxPerWindow`. A notifier that catches its
+own failures still works; errorAlerts just treats every call as delivered.
+Logging failures at `ERROR` or `FATAL` can create another alert. See
+[PayloadBuilder.cfc](../models/PayloadBuilder.cfc) for the fields in error and
+digest payloads.
 
 ## Troubleshooting
 
@@ -391,9 +435,15 @@ Start with the [README checklist](../README.md#no-email-arrived). Also check:
 - Your cbmailservices default mailer sends email rather than storing or discarding it.
 - Temporarily using `deliveryMode : "send"` removes any background queue delay.
 - Both the errorAlerts digest task and cbmailservices mail queue task can run.
+  errorAlerts prints a startup warning when `deliveryMode` is `"queue"` and
+  cbmailservices' `runQueueTask` is `false`.
+- Queued mail lives in memory. A restart before the queue task runs loses it.
+- For a request timeout, see [Request timeouts](#request-timeouts).
 
 Delivery failures do not replace the application's error page. Check server
-console output, error logs, and cbmailservices logs for the cause.
+console output, error logs, and cbmailservices logs for the cause. In `send`
+mode a failed send prints `errorAlerts notifier failed: email delivery failed`
+with cbmailservices' reason.
 
 ### Errors outside ColdBox are not reported
 

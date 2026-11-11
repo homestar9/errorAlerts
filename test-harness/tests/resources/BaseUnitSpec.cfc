@@ -31,6 +31,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="/root" {
 			subjectPrefix        : "[Harness]",
 			notifier             : "EmailNotifier@errorAlerts",
 			deliveryMode         : "send",
+			timeoutExtensionSeconds : 60,
 			levelMin             : "FATAL",
 			levelMax             : "ERROR",
 			throttle             : { maxPerWindow : 3, windowSeconds : 600, maxTrackedSignatures : 500 },

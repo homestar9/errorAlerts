@@ -18,6 +18,10 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	 */
 	function init(){
 		variables.system = createObject( "java", "java.lang.System" );
+
+		// Cap failure text. cbmailservices puts full stack traces in its result messages.
+		variables.MAX_FAILURE_TEXT = 500;
+
 		return this;
 	}
 
@@ -25,8 +29,15 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	 * sendNotification
 	 *
 	 * Builds and delivers one alert or digest email.
-	 * Mail failures go to System.err. They cannot break the request or create
-	 * another LogBox error.
+	 *
+	 * A failure throws errorAlerts.DeliveryFailed. CaptureService catches it,
+	 * prints it to System.err, and lets onError() retry the alert. Nothing here
+	 * logs through LogBox, so a failure cannot create another alert.
+	 *
+	 * cbmailservices' send() never throws: it records a failure on the mail
+	 * object. Send mode checks that record. Success means the engine accepted
+	 * the mail; Adobe and Lucee spool cfmail and deliver it later. Queue mode
+	 * only adds the mail to an in-memory queue, so success means queued.
 	 *
 	 * Send no email when the to setting is blank. The module does not register
 	 * its appender and interceptor in that case, but direct captureException()
@@ -36,17 +47,17 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 	 * @payload The payload struct from PayloadBuilder.
 	 */
 	void function sendNotification( required struct payload ){
-		try {
-			if ( !settings.to.trim().len() ) {
-				if ( !variables.keyExists( "warnedBlankTo" ) ) {
-					variables.warnedBlankTo = true;
-					variables.system.err.println(
-						"errorAlerts: setting `to` is blank, so no alert email was sent."
-					);
-				}
-				return;
+		if ( !settings.to.trim().len() ) {
+			if ( !variables.keyExists( "warnedBlankTo" ) ) {
+				variables.warnedBlankTo = true;
+				variables.system.err.println(
+					"errorAlerts: setting `to` is blank, so no alert email was sent."
+				);
 			}
+			return;
+		}
 
+		try {
 			var mail = mailService.newMail(
 				to      = settings.to,
 				from    = settings.from.trim().len() ? settings.from : settings.to,
@@ -63,8 +74,27 @@ component singleton accessors="true" implements="errorAlerts.models.notifiers.IN
 				mailService.queue( mail );
 			}
 		} catch ( any e ) {
-			variables.system.err.println( "errorAlerts email delivery failed: #e.message# #e.detail#" );
+			throwDeliveryFailed( "#e.message# #e.detail#" );
 		}
+
+		if ( settings.deliveryMode == "send" && mail.hasErrors() ) {
+			throwDeliveryFailed( mail.getResultMessages().toList( " | " ) );
+		}
+	}
+
+	/**
+	 * throwDeliveryFailed
+	 *
+	 * Throws the exception CaptureService treats as a failed delivery.
+	 *
+	 * @reason What went wrong, capped before it is thrown.
+	 */
+	private void function throwDeliveryFailed( required string reason ){
+		throw(
+			type    = "errorAlerts.DeliveryFailed",
+			message = "email delivery failed",
+			detail  = arguments.reason.left( variables.MAX_FAILURE_TEXT )
+		);
 	}
 
 	/**

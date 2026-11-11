@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-11-11
+
+These changes harden how errorAlerts behaves around request timeouts and failed
+deliveries. They came from a production timeout on Adobe 2023 whose alert never
+arrived. The cause of that lost alert is still unknown; nothing here is a
+confirmed fix for it.
+
+### Added
+
+- **New `timeoutExtensionSeconds` setting, default `60`.** When
+  `captureException()` receives an error from a request that is already past its
+  time limit, it raises the limit so at least this many seconds remain, so the
+  alert and the application's error page can finish. It accounts for time
+  already spent, runs once per request, only adds time, and does nothing when
+  the request is within its limit. Adobe and Lucee only; BoxLang does not
+  enforce `requestTimeout`. `0` turns it off.
+  - On Adobe, the error template's `cfoutput` threw the timeout again. The
+    `onError()` page replaced ColdBox's error page, and a second alert was sent.
+  - On Lucee, the timeout skips ColdBox and reaches only `onError()`. Lucee then
+    stopped the request again inside `onError()`, and no alert was sent. Under
+    load about one timeout in fifteen can still be lost this way.
+- A startup warning when `deliveryMode` is `"queue"` and cbmailservices'
+  `runQueueTask` is `false`, since queued alerts would then never be sent.
+- A [Request timeouts](docs/reference.md#request-timeouts) section in the
+  reference. Lucee applications need the `onError()` block to report timeouts.
+
+### Fixed
+
+- A failed alert no longer stops an `onError()` retry of the same exception.
+  `captureException()` now records an exception as reported only after it was
+  sent. A retry counts as another occurrence for throttling.
+- A failed send in `deliveryMode : "send"` is no longer silent. cbmailservices
+  records the failure on the mail instead of throwing; errorAlerts now checks it
+  and prints it.
+- A digest that fails to build no longer stops the alert sent with it, or the
+  other digests in a flush.
+- **The `errorAlerts-digest-flush` task no longer fails every minute on Adobe
+  ColdFusion behind IIS.** The error read `Error building:
+  PayloadBuilder@errorAlerts -> Could not find the ColdFusion component or
+  interface coldbox.system.logging.LogLevels`. A ColdBox scheduled task thread
+  there uses the wrong web root, so a `coldbox.*` path only resolves when the
+  application maps `/coldbox`. The task was often the first code to build
+  `PayloadBuilder` after a restart, so it failed until an error in a web request
+  built it. An alert for an error raised inside one of the application's own
+  scheduled tasks could be lost the same way. `PayloadBuilder` no longer creates
+  LogBox's `LogLevels`, and severity names are unchanged.
+
+### Changed
+
+- `EmailNotifier.sendNotification()` throws `errorAlerts.DeliveryFailed` when
+  delivery fails, instead of printing and returning. errorAlerts catches it, so
+  it never reaches the request, but code that calls the notifier directly now
+  sees the exception. The console line reads
+  `errorAlerts notifier failed: email delivery failed ...` instead of
+  `errorAlerts email delivery failed: ...`.
+- Custom notifiers can now report a failed delivery by throwing. See
+  [Custom notifiers](docs/reference.md#custom-notifiers). A notifier that
+  catches its own failures keeps working as before.
+
 ## [2.9.1] - 2026-11-02
 
 ### Fixed
